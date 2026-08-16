@@ -162,22 +162,31 @@ final class CloudSync: NSObject, ObservableObject {
             return
         }
 
+        // Joined someone's household but holding no animals: whatever the
+        // fetch token says, this phone is not caught up. Start the shared
+        // fetch over from nothing rather than trust it.
+        if !isOwner, store?.data.pets.isEmpty == true, state.sharedState != nil {
+            state.sharedState = nil
+            sharedEngine = makeEngine(scope: .shared, stateData: nil)
+            saveState()
+        }
+
         if isOwner {
             privateEngine?.state.add(pendingDatabaseChanges: [
                 .saveZone(CKRecordZone(zoneID: ownZoneID)),
             ])
-            // First launch, or nothing has ever been confirmed saved (for
-            // example every earlier send failed before the zone existed):
-            // put the whole household back in the queue.
-            let anyRecordSynced = state.systemFields.keys.contains { parse(recordName: $0) != nil }
-            if !state.didInitialUpload || !anyRecordSynced {
-                enqueueAllRecords()
-                state.didInitialUpload = true
-                saveState()
-            }
+            // Every launch: anything the server has never confirmed saved
+            // goes (back) in the queue. "Has anything ever synced" was too
+            // weak a test: a household where the demo dogs synced but the
+            // real ones were added while sync was down looked healthy and
+            // never uploaded the real ones. Idempotent, and cheap when the
+            // zone is current.
+            let unsynced = enqueueUnsyncedRecords()
+            state.didInitialUpload = true
+            saveState()
             CloudSync.debugDump("bootstrap owner",
                                 "pets: \(store?.data.pets.count ?? -1) events: \(store?.data.events.count ?? -1)",
-                                "anyRecordSynced: \(anyRecordSynced) systemFields: \(state.systemFields.count)",
+                                "unsynced queued: \(unsynced) systemFields: \(state.systemFields.count)",
                                 "pending: \(privateEngine?.state.pendingRecordZoneChanges.count ?? -1)")
         }
 
@@ -276,9 +285,23 @@ final class CloudSync: NSObject, ObservableObject {
         return changes
     }
 
-    private func enqueueAllRecords() {
-        guard let data = store?.data else { return }
-        localDataChanged(old: AppData(), new: data)
+    /// Queue a save for every local record the server has never confirmed
+    /// (no cached system fields). Returns how many were queued.
+    @discardableResult
+    private func enqueueUnsyncedRecords() -> Int {
+        guard case .live = status, let engine = householdEngine, let data = store?.data else { return 0 }
+        var ids: [CKRecord.ID] = []
+        ids += data.pets.map { recordID(.pet, $0.id) }
+        ids += data.items.map { recordID(.item, $0.id) }
+        ids += data.events.map { recordID(.event, $0.id) }
+        ids += data.interventions.map { recordID(.intervention, $0.id) }
+        ids += data.crossFeeds.map { recordID(.crossFeed, $0.id) }
+        ids += data.episodes.map { recordID(.episode, $0.id) }
+        ids += data.exposures.map { recordID(.exposure, $0.id) }
+        let unsynced = ids.filter { state.systemFields[$0.recordName] == nil }
+        guard !unsynced.isEmpty else { return 0 }
+        engine.state.add(pendingRecordZoneChanges: unsynced.map { .saveRecord($0) })
+        return unsynced.count
     }
 
     // MARK: - Record mapping
@@ -569,16 +592,18 @@ final class CloudSync: NSObject, ObservableObject {
                     store.isApplyingRemote = false
                 }
                 saveState()
-                // Joining from inside the demo sandbox: the engines were torn
-                // down, and the demo's fetch state must not be trusted. Bring
-                // them back up fresh so the household actually comes down.
-                if sharedEngine == nil {
+                // Local data was just replaced, so the shared engine's fetch
+                // token must go too: a token that already "saw" this zone
+                // (an earlier join, or the demo's engines) would leave the
+                // household permanently empty. Rebuild it fresh so the whole
+                // zone comes down. Same for a private engine the demo tore down.
+                state.sharedState = nil
+                sharedEngine = makeEngine(scope: .shared, stateData: nil)
+                if privateEngine == nil {
                     state.privateState = nil
-                    state.sharedState = nil
-                    saveState()
                     privateEngine = makeEngine(scope: .private, stateData: nil)
-                    sharedEngine = makeEngine(scope: .shared, stateData: nil)
                 }
+                saveState()
                 status = .live(isOwner: false)
                 try? await sharedEngine?.fetchChanges()
             } catch {
