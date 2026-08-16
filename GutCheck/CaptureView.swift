@@ -123,7 +123,7 @@ struct CaptureSheet: View {
                                     .font(.subheadline.weight(.semibold))
                                     .foregroundColor(.primary)
                                 Text(AIScorer.isConfigured
-                                     ? "AI prefills all four axes from the photo, or skip it and tap chips below"
+                                     ? "AI prefills all four axes from the photo (the photo is sent to Anthropic for scoring only), or skip it and tap chips below"
                                      : "Attach it to the record, then score with the chips below")
                                     .font(.caption)
                                     .foregroundColor(.secondary)

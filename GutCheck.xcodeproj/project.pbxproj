@@ -10,6 +10,7 @@
 		06C431C40892AB6BFBFF4C19 /* PetScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65DF898CEFE63C8E710E458E /* PetScreen.swift */; };
 		0CEDD21181B0C61106BFF842 /* PetEditView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05B6887D59C555216027ACF4 /* PetEditView.swift */; };
 		2B19DED9E13DE7E07B8A275A /* SummaryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4310DA157945EED9A6B0CBD /* SummaryView.swift */; };
+		36E96144FD81C8209EDF60B1 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = DCCC25602868E44F8F095AAA /* PrivacyInfo.xcprivacy */; };
 		3CE4D6ABD5529ADF77C2E0E9 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = EB6EA9A8BC10FD3514AB54B2 /* Assets.xcassets */; };
 		46ED080FDA326931A99A049D /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8C43088D0E1D620D7BB33DD /* HomeView.swift */; };
 		4BDB42498BCD17E81ABB97F2 /* CloudSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = 842667E423BB5EE12AC0DA99 /* CloudSync.swift */; };
@@ -44,6 +45,7 @@
 		B3E848D8F4B1838A8D9A1CC6 /* SyncView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncView.swift; sourceTree = "<group>"; };
 		C8C43088D0E1D620D7BB33DD /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
 		D4310DA157945EED9A6B0CBD /* SummaryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SummaryView.swift; sourceTree = "<group>"; };
+		DCCC25602868E44F8F095AAA /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		E78199832FC64C3A70E1470A /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
 		EB6EA9A8BC10FD3514AB54B2 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -74,6 +76,7 @@
 				A2918A3A27FA8F9D8F3095DB /* OnboardingView.swift */,
 				05B6887D59C555216027ACF4 /* PetEditView.swift */,
 				65DF898CEFE63C8E710E458E /* PetScreen.swift */,
+				DCCC25602868E44F8F095AAA /* PrivacyInfo.xcprivacy */,
 				24EE06A27176DE73DCD95CE6 /* Store.swift */,
 				D4310DA157945EED9A6B0CBD /* SummaryView.swift */,
 				B3E848D8F4B1838A8D9A1CC6 /* SyncView.swift */,
@@ -148,6 +151,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				3CE4D6ABD5529ADF77C2E0E9 /* Assets.xcassets in Resources */,
+				36E96144FD81C8209EDF60B1 /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -220,7 +224,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.meagan.gutcheck;
+				PRODUCT_BUNDLE_IDENTIFIER = com.meagan.scoop;
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 5.9;
 				TARGETED_DEVICE_FAMILY = 1;
@@ -364,7 +368,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.meagan.gutcheck;
+				PRODUCT_BUNDLE_IDENTIFIER = com.meagan.scoop;
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 5.9;
 				TARGETED_DEVICE_FAMILY = 1;

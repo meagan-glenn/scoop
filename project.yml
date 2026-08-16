@@ -20,7 +20,7 @@ targets:
       path: GutCheck/GutCheck.entitlements
       properties:
         com.apple.developer.icloud-services: [CloudKit]
-        com.apple.developer.icloud-container-identifiers: [iCloud.com.meagan.gutcheck]
+        com.apple.developer.icloud-container-identifiers: [iCloud.com.meagan.scoop]
         aps-environment: development
     postBuildScripts:
       - name: Copy Secrets.plist (optional, local only)
@@ -32,7 +32,7 @@ targets:
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
-        PRODUCT_BUNDLE_IDENTIFIER: com.meagan.gutcheck
+        PRODUCT_BUNDLE_IDENTIFIER: com.meagan.scoop
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
         TARGETED_DEVICE_FAMILY: "1"

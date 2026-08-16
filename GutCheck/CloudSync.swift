@@ -35,7 +35,7 @@ enum SyncStatus: Equatable {
 final class CloudSync: NSObject, ObservableObject {
     static let shared = CloudSync()
 
-    static let containerID = "iCloud.com.meagan.gutcheck"
+    static let containerID = "iCloud.com.meagan.scoop"
     static let zoneName = "Household"
 
     @Published var status: SyncStatus = .starting
