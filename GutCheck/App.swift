@@ -25,8 +25,17 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
 }
 
 final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
+    /// Invite tapped while Scoop is already running.
     func windowScene(_ windowScene: UIWindowScene, userDidAcceptCloudKitShareWith metadata: CKShare.Metadata) {
         CloudSync.shared.acceptShare(metadata)
+    }
+
+    /// Invite tapped while Scoop is not running: the metadata arrives with the
+    /// scene connection instead of the callback above.
+    func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options connectionOptions: UIScene.ConnectionOptions) {
+        if let metadata = connectionOptions.cloudKitShareMetadata {
+            CloudSync.shared.acceptShare(metadata)
+        }
     }
 }
 

@@ -41,6 +41,7 @@
 		64F3F7188AF5F7B5A1FB6C15 /* Domain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Domain.swift; sourceTree = "<group>"; };
 		65DF898CEFE63C8E710E458E /* PetScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PetScreen.swift; sourceTree = "<group>"; };
 		842667E423BB5EE12AC0DA99 /* CloudSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudSync.swift; sourceTree = "<group>"; };
+		A1E6FB9D4EF5C514C3DE92C6 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		A2918A3A27FA8F9D8F3095DB /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
 		B3E848D8F4B1838A8D9A1CC6 /* SyncView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncView.swift; sourceTree = "<group>"; };
 		C8C43088D0E1D620D7BB33DD /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
@@ -72,6 +73,7 @@
 				5558F0CCCAD205FA530CF3AF /* GutCheck.entitlements */,
 				547A9BD361A6B6D696EF818E /* HistoryView.swift */,
 				C8C43088D0E1D620D7BB33DD /* HomeView.swift */,
+				A1E6FB9D4EF5C514C3DE92C6 /* Info.plist */,
 				6041A40F4EAAC165B68C14C6 /* LookbackView.swift */,
 				A2918A3A27FA8F9D8F3095DB /* OnboardingView.swift */,
 				05B6887D59C555216027ACF4 /* PetEditView.swift */,
@@ -217,15 +219,14 @@
 				CODE_SIGN_ENTITLEMENTS = GutCheck/GutCheck.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = MRV697X79G;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = GutCheck/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Scoop;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
-				INFOPLIST_KEY_UIBackgroundModes = "remote-notification";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -364,15 +365,14 @@
 				CODE_SIGN_ENTITLEMENTS = GutCheck/GutCheck.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = MRV697X79G;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = GutCheck/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Scoop;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
-				INFOPLIST_KEY_UIBackgroundModes = "remote-notification";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",

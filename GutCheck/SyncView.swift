@@ -8,8 +8,8 @@ struct SyncSheet: View {
     @ObservedObject var sync = CloudSync.shared
     @Environment(\.dismiss) private var dismiss
     @State private var share: CKShare?
-    @State private var showShareController = false
     @State private var shareError: String?
+    @State private var isPreparingShare = false
 
     var body: some View {
         NavigationStack {
@@ -38,15 +38,42 @@ struct SyncSheet: View {
                             Text("Everyone you invite sees the same animals and logs the same record, from their own phone.")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
-                            Button {
-                                prepareShare()
-                            } label: {
-                                Label("Invite someone", systemImage: "person.badge.plus")
+                            if let url = share?.url {
+                                ShareLink(item: url, subject: Text("Join our Scoop household"),
+                                          message: Text("Tap this on your phone to see the same animals and logs I do.")) {
+                                    Label("Send invite link", systemImage: "link")
+                                        .font(.subheadline.weight(.semibold))
+                                        .frame(maxWidth: .infinity)
+                                        .padding(.vertical, 8)
+                                }
+                                .buttonStyle(.borderedProminent)
+                                Button {
+                                    presentSharingController()
+                                } label: {
+                                    Label("Manage who's in", systemImage: "person.2")
+                                        .font(.subheadline.weight(.semibold))
+                                        .frame(maxWidth: .infinity)
+                                        .padding(.vertical, 8)
+                                }
+                                .buttonStyle(.bordered)
+                            } else {
+                                Button {
+                                    prepareShare()
+                                } label: {
+                                    Group {
+                                        if isPreparingShare {
+                                            ProgressView()
+                                        } else {
+                                            Label("Invite someone", systemImage: "person.badge.plus")
+                                        }
+                                    }
                                     .font(.subheadline.weight(.semibold))
                                     .frame(maxWidth: .infinity)
                                     .padding(.vertical, 8)
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(isPreparingShare)
                             }
-                            .buttonStyle(.borderedProminent)
                         }
                         .card()
                     } else {
@@ -82,10 +109,10 @@ struct SyncSheet: View {
                     Button("Done") { dismiss() }
                 }
             }
-            .sheet(isPresented: $showShareController) {
-                if let share {
-                    CloudShareView(share: share, container: sync.container)
-                        .ignoresSafeArea()
+            .task {
+                // If a share already exists, surface the link right away.
+                if case .live(true) = sync.status, share == nil {
+                    share = try? await CloudSync.shared.existingShare()
                 }
             }
         }
@@ -109,38 +136,43 @@ struct SyncSheet: View {
 
     private func prepareShare() {
         shareError = nil
+        isPreparingShare = true
         Task {
+            defer { isPreparingShare = false }
             do {
                 share = try await CloudSync.shared.fetchOrCreateShare()
-                showShareController = true
             } catch {
                 shareError = "Couldn't start sharing: \(error.localizedDescription)"
             }
         }
     }
+
+    /// Apple's sharing UI, presented from UIKit. Wrapping it in a SwiftUI
+    /// sheet is unreliable (blank or unresponsive), so find the top view
+    /// controller and present directly.
+    private func presentSharingController() {
+        guard let share else { return }
+        let controller = UICloudSharingController(share: share, container: sync.container)
+        controller.availablePermissions = [.allowPublic, .allowPrivate, .allowReadWrite]
+        controller.delegate = sharingDelegate
+        sharingDelegate.onError = { message in shareError = message }
+        guard let scene = UIApplication.shared.connectedScenes
+                .compactMap({ $0 as? UIWindowScene })
+                .first(where: { $0.activationState == .foregroundActive }),
+              var top = scene.keyWindow?.rootViewController else { return }
+        while let presented = top.presentedViewController { top = presented }
+        top.present(controller, animated: true)
+    }
 }
 
-/// The system share sheet for a CKShare: add people, copy the link, manage
-/// participants. Apple's UI, wrapped.
-struct CloudShareView: UIViewControllerRepresentable {
-    let share: CKShare
-    let container: CKContainer
+private let sharingDelegate = SharingDelegate()
 
-    func makeUIViewController(context: Context) -> UICloudSharingController {
-        let controller = UICloudSharingController(share: share, container: container)
-        controller.availablePermissions = [.allowPrivate, .allowReadWrite]
-        controller.delegate = context.coordinator
-        return controller
+final class SharingDelegate: NSObject, UICloudSharingControllerDelegate {
+    var onError: ((String) -> Void)?
+    func itemTitle(for csc: UICloudSharingController) -> String? { "Scoop household" }
+    func cloudSharingController(_ csc: UICloudSharingController, failedToSaveShareWithError error: Error) {
+        onError?("Sharing failed: \(error.localizedDescription)")
     }
-
-    func updateUIViewController(_ controller: UICloudSharingController, context: Context) {}
-
-    func makeCoordinator() -> Coordinator { Coordinator() }
-
-    final class Coordinator: NSObject, UICloudSharingControllerDelegate {
-        func itemTitle(for csc: UICloudSharingController) -> String? { "Scoop household" }
-        func cloudSharingController(_ csc: UICloudSharingController, failedToSaveShareWithError error: Error) {}
-        func cloudSharingControllerDidSaveShare(_ csc: UICloudSharingController) {}
-        func cloudSharingControllerDidStopSharing(_ csc: UICloudSharingController) {}
-    }
+    func cloudSharingControllerDidSaveShare(_ csc: UICloudSharingController) {}
+    func cloudSharingControllerDidStopSharing(_ csc: UICloudSharingController) {}
 }

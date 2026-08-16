@@ -16,6 +16,16 @@ targets:
           - "Secrets.plist"
     # CloudKit household sync. The container is provisioned by the paid
     # developer account; without one the app runs pure-local (sync stays off).
+    # Generated Info.plist keys that have no INFOPLIST_KEY_ build setting.
+    # CKSharingSupported is what lets iOS open a CloudKit share link in Scoop.
+    info:
+      path: GutCheck/Info.plist
+      properties:
+        CKSharingSupported: true
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UIBackgroundModes: [remote-notification]
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
     entitlements:
       path: GutCheck/GutCheck.entitlements
       properties:
@@ -38,13 +48,11 @@ targets:
         DEVELOPMENT_TEAM: MRV697X79G
         CODE_SIGN_STYLE: Automatic
         MARKETING_VERSION: "0.1.0"
-        CURRENT_PROJECT_VERSION: "1"
+        CURRENT_PROJECT_VERSION: "2"
         TARGETED_DEVICE_FAMILY: "1"
         SWIFT_VERSION: "5.9"
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
-        INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationPortrait"
-        INFOPLIST_KEY_UIBackgroundModes: "remote-notification"
         INFOPLIST_KEY_CFBundleDisplayName: "Scoop"
         # HTTPS only; skips the App Store Connect export compliance prompt.
         INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO

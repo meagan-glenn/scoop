@@ -46,6 +46,9 @@ final class CloudSync: NSObject, ObservableObject {
     private var privateEngine: CKSyncEngine?
     private var sharedEngine: CKSyncEngine?
     private var state = PersistedState()
+    /// An invite that arrived before start() ran (cold launch from a share link).
+    private var pendingShareMetadata: CKShare.Metadata?
+    private var didBootstrap = false
 
     // MARK: - Persisted sync state
 
@@ -134,7 +137,13 @@ final class CloudSync: NSObject, ObservableObject {
         }
 
         status = .live(isOwner: isOwner)
-        await fetchNow()
+        didBootstrap = true
+        if let metadata = pendingShareMetadata {
+            pendingShareMetadata = nil
+            acceptShare(metadata)
+        } else {
+            await fetchNow()
+        }
     }
 
     private func makeEngine(scope: CKDatabase.Scope, stateData: CKSyncEngine.State.Serialization?) -> CKSyncEngine {
@@ -359,15 +368,35 @@ final class CloudSync: NSObject, ObservableObject {
     // MARK: - Sharing
 
     /// Fetch the household zone's existing zone-wide share, or create one.
+    /// The household's share if one has been created, without creating one.
+    func existingShare() async throws -> CKShare? {
+        let shareID = CKRecord.ID(recordName: CKRecordNameZoneWideShare, zoneID: ownZoneID)
+        return try? await container.privateCloudDatabase.record(for: shareID) as? CKShare
+    }
+
     func fetchOrCreateShare() async throws -> CKShare {
         let database = container.privateCloudDatabase
         let shareID = CKRecord.ID(recordName: CKRecordNameZoneWideShare, zoneID: ownZoneID)
         if let existing = try? await database.record(for: shareID) as? CKShare {
+            if existing.publicPermission == .none {
+                existing.publicPermission = .readWrite
+                let (results, _) = try await database.modifyRecords(saving: [existing], deleting: [])
+                for (_, result) in results {
+                    if let saved = try? result.get() as? CKShare { return saved }
+                }
+            }
             return existing
         }
+        // The sync engine creates the zone asynchronously; make sure it exists
+        // before saving a share into it, or a fresh install fails with
+        // zoneNotFound on the first tap.
+        _ = try await database.modifyRecordZones(saving: [CKRecordZone(zoneID: ownZoneID)], deleting: [])
         let share = CKShare(recordZoneID: ownZoneID)
         share[CKShare.SystemFieldKey.title] = "Scoop household" as CKRecordValue
-        share.publicPermission = .none
+        // Anyone with the link joins with read/write, like a Notes invite link.
+        // The link is unguessable; a household of a few people doesn't need
+        // per-person invitations.
+        share.publicPermission = .readWrite
         let (saveResults, _) = try await database.modifyRecords(saving: [share], deleting: [])
         for (_, result) in saveResults {
             if let saved = try? result.get() as? CKShare { return saved }
@@ -379,6 +408,10 @@ final class CloudSync: NSObject, ObservableObject {
     /// the owner's zone via the shared database. Local data is replaced by
     /// what syncs down (v1 rule: joining replaces, documented).
     func acceptShare(_ metadata: CKShare.Metadata) {
+        guard didBootstrap else {
+            pendingShareMetadata = metadata
+            return
+        }
         Task {
             do {
                 try await container.accept(metadata)
