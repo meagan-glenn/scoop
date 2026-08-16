@@ -200,6 +200,19 @@ final class CloudSync: NSObject, ObservableObject {
         }
     }
 
+    /// Re-run bootstrap from inside an engine delegate callback. It has to be
+    /// a *detached* task: a plain `Task {}` inherits the callback's task-local
+    /// context, and CKSyncEngine traps ("BUG IN CLIENT OF CLOUDKIT: Cannot
+    /// await a call into CKSyncEngine from within a delegate callback") the
+    /// moment bootstrap awaits `sendChanges`. That trap was the build 7 crash
+    /// on the partner's phone, where the engine reports an account change at
+    /// launch.
+    private func rebootstrapDetached() {
+        Task.detached { [weak self] in
+            await self?.bootstrap()
+        }
+    }
+
     /// Bootstrap is done (engines up, or deliberately down for the demo).
     /// An invite that arrived early is accepted now; even from inside the
     /// demo, since joining a real household is the one thing that beats
@@ -684,8 +697,34 @@ extension CloudSync: CKSyncEngineDelegate {
             }
             saveState()
 
-        case .accountChange:
-            Task { await bootstrap() }
+        case .accountChange(let change):
+            CloudSync.debugDump("accountChange: \(change.changeType) status: \(status)")
+            switch change.changeType {
+            case .signIn:
+                // The engines were just built under this account; a sign-in
+                // notice at that point is informational. Re-running bootstrap
+                // here rebuilt the engines, which announced sign-in again.
+                if case .live = status { break }
+                rebootstrapDetached()
+            case .signOut:
+                privateEngine = nil
+                sharedEngine = nil
+                state.privateState = nil
+                state.sharedState = nil
+                saveState()
+                status = .off("Sign in to iCloud in Settings to sync")
+            case .switchAccounts:
+                // Nothing cached is trustworthy across accounts: engine
+                // tokens, server change tags, or the zone we had joined.
+                state.privateState = nil
+                state.sharedState = nil
+                state.systemFields = [:]
+                state.joinedZone = nil
+                saveState()
+                rebootstrapDetached()
+            @unknown default:
+                rebootstrapDetached()
+            }
 
         case .fetchedRecordZoneChanges(let changes):
             applyRemote(
