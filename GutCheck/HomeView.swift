@@ -22,6 +22,10 @@ struct HomeView: View {
                         .foregroundColor(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
 
+                    if store.data.isDemo {
+                        DemoBanner()
+                    }
+
                     // The household is the hero — 95% of opens are healthy days,
                     // and the pets are why anyone is here.
                     SectionHeader(title: "The household")
@@ -65,15 +69,18 @@ struct HomeView: View {
                     }
 
                     // One quiet row; the sheet holds the invite and status.
-                    Button {
-                        showSync = true
-                    } label: {
-                        Label(syncRowLabel, systemImage: syncRowSymbol)
-                            .font(.footnote)
-                            .foregroundColor(.secondary)
-                            .frame(maxWidth: .infinity)
+                    // Hidden in the demo — pretend animals don't sync.
+                    if !store.data.isDemo {
+                        Button {
+                            showSync = true
+                        } label: {
+                            Label(syncRowLabel, systemImage: syncRowSymbol)
+                                .font(.footnote)
+                                .foregroundColor(.secondary)
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
 
                     SectionHeader(title: "Quick log")
                         .padding(.top, 4)
@@ -173,6 +180,29 @@ struct HomeView: View {
     private var defaultCapturePet: UUID? {
         let watched = store.activePets.first { $0.mode != .baseline }
         return (watched ?? store.activePets.first)?.id
+    }
+}
+
+/// The demo is a clearly-marked sandbox: pretend animals, no sync, and one
+/// obvious door back out to set up a real household.
+struct DemoBanner: View {
+    @EnvironmentObject var store: AppStore
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("You're in the demo household", systemImage: "sparkles")
+                .font(.subheadline.weight(.semibold))
+            Text("Everything here is pretend and stays on this phone. Nothing syncs to your iCloud.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            Button("Exit and set up your own") {
+                store.exitDemo()
+                CloudSync.shared.demoEnded()
+            }
+            .font(.subheadline.weight(.semibold))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .card(DS.brand.opacity(0.10))
     }
 }
 

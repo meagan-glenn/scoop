@@ -83,6 +83,7 @@ The multi-pet household is the wedge, so the household is also the sync unit: on
 - **Graceful degradation, again.** No iCloud account, or a clone built without the CloudKit container, and the app is exactly as local-only as it was before sync existed. The sync row on the home screen says so instead of pretending.
 - **Conflicts are last-writer-wins per record.** Two people rarely edit the same poop. The failure mode this accepts (simultaneous edits to the same record, one wins) is much cheaper than the merge machinery it avoids.
 - **Joining replaces.** Accepting a household invite makes the shared household your household. V1 rule, documented rather than hidden.
+- **The demo household never syncs.** "Just looking" is a clearly labeled local sandbox: the engines stay down while it's active, and it has an explicit exit back to onboarding. Demo animals that earlier builds leaked into a real household get scrubbed on sight, locally and from the zone. A demo animal that was renamed into a real one keeps its identity and loses only the pretend history it came with.
 
 Activating it requires an Apple Developer Program membership (the iCloud container is provisioned through the paid account); without one the code paths above simply stay dark.
 

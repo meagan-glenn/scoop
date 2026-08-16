@@ -1,7 +1,7 @@
 import Foundation
 import Combine
 
-struct AppData: Codable {
+struct AppData: Codable, Equatable {
     var pets: [Pet] = []
     var items: [Item] = []
     var events: [OutputEvent] = []
@@ -10,6 +10,10 @@ struct AppData: Codable {
     var episodes: [Episode] = []
     var exposures: [ExposureEvent] = []
     var hasOnboarded: Bool = false
+    /// True while this device is exploring the bundled demo household. Demo
+    /// data is a local sandbox: it never uploads to CloudKit and a real
+    /// household must never merge into it.
+    var isDemo: Bool = false
 
     init() {}
 
@@ -25,6 +29,7 @@ struct AppData: Codable {
         exposures = try container.decodeIfPresent([ExposureEvent].self, forKey: .exposures) ?? []
         // Files written before onboarding existed already have a household.
         hasOnboarded = try container.decodeIfPresent(Bool.self, forKey: .hasOnboarded) ?? !pets.isEmpty
+        isDemo = try container.decodeIfPresent(Bool.self, forKey: .isDemo) ?? false
     }
 }
 
@@ -72,6 +77,142 @@ final class AppStore: ObservableObject {
 
     func resetToSeed() {
         data = AppStore.seed()
+    }
+
+    /// Leaves the demo sandbox entirely: demo data is discarded and the app
+    /// returns to onboarding. Nothing in the demo ever synced, so there is
+    /// nothing to undo in the cloud.
+    func exitDemo() {
+        data = AppData()
+    }
+
+    // MARK: - Demo hygiene
+
+    /// The seed animals, identifiable by their exact signature. Used to scrub
+    /// demo animals that older builds accidentally synced into a real
+    /// household via CloudKit.
+    private static let seedPetSignatures: Set<String> = [
+        "Navi|Dog|Cattle dog mix|🐕",
+        "Albus|Dog|Golden retriever|🦮",
+        "Arya|Dog|Border collie|🐶",
+    ]
+
+    /// Household-scoped seed items carry no pet ID, so they are matched the
+    /// same way the seed pets are: by exact signature.
+    private static let seedHouseholdItemSignatures: Set<String> = [
+        "Bully sticks|chew",
+        "Yak cheese chew|chew",
+    ]
+
+    private static func isSeedPet(_ pet: Pet) -> Bool {
+        pet.photoFilename == nil &&
+            seedPetSignatures.contains("\(pet.name)|\(pet.species.rawValue)|\(pet.breed)|\(pet.avatar)")
+    }
+
+    /// Older builds could upload the demo household to CloudKit and later
+    /// merge it into a real one. Straightens that out:
+    ///
+    /// - A household that is nothing but the seed is the demo itself (loaded
+    ///   on a build before the flag existed) — it gets re-flagged as the demo
+    ///   sandbox rather than wiped out from under the user.
+    /// - A real household with seed animals mixed in gets them removed, along
+    ///   with every record that references them. The removal is a normal
+    ///   local mutation, so when sync is live the deletions propagate and
+    ///   scrub the cloud copy too.
+    ///
+    /// - A demo animal that was renamed into a real one (the obvious way to
+    ///   "set up your own" on a build with no delete and no exit) keeps its
+    ///   identity but loses the pretend history it came with; see
+    ///   `scrubSeedHistory`.
+    ///
+    /// Returns true when the data is (or turned out to be) the demo sandbox,
+    /// which the sync layer takes as its cue to stay down.
+    @discardableResult
+    func reconcileDemoData() -> Bool {
+        guard !data.isDemo else { return true }
+        let demoIDs = Set(data.pets.filter(Self.isSeedPet).map(\.id))
+        if !demoIDs.isEmpty, demoIDs.count == data.pets.count {
+            data.isDemo = true
+            return true
+        }
+        var cleaned = data
+        if !demoIDs.isEmpty {
+            cleaned.pets.removeAll { demoIDs.contains($0.id) }
+            cleaned.events.removeAll { demoIDs.contains($0.petID) }
+            cleaned.interventions.removeAll { demoIDs.contains($0.petID) }
+            cleaned.crossFeeds.removeAll { demoIDs.contains($0.eaterID) || demoIDs.contains($0.foodOwnerID) }
+            cleaned.episodes.removeAll { demoIDs.contains($0.petID) }
+            cleaned.exposures.removeAll { $0.petID.map(demoIDs.contains) ?? false }
+            cleaned.items.removeAll { item in
+                switch item.scope {
+                case .pet(let owner): return demoIDs.contains(owner)
+                case .household: return Self.seedHouseholdItemSignatures.contains("\(item.name)|\(item.kind)")
+                }
+            }
+        }
+        Self.scrubSeedHistory(from: &cleaned)
+        if cleaned != data {
+            data = cleaned
+        }
+        return false
+    }
+
+    /// The seed's episodes are recognizable by their exact notes, and every
+    /// other seed record was stamped relative to the same `now`, so once an
+    /// episode is known each of them sits at a fixed offset from it. That
+    /// fingerprint is what gets removed; anything a person logged (a photo,
+    /// a note, an off-pattern timestamp) survives.
+    private static func scrubSeedHistory(from data: inout AppData) {
+        let day = 24 * 3600.0
+        let tolerance = 2.0
+        // note → offset of `now` from the episode's start (seed: daysAgo(61), daysAgo(1.1))
+        let seedEpisodes: [String: TimeInterval] = [
+            "Soft stool after park weekend": 61 * day,
+            "Soft serve since yesterday morning": 1.1 * day,
+        ]
+        let demoEpisodes = data.episodes.filter { seedEpisodes[$0.note] != nil }
+        guard !demoEpisodes.isEmpty else { return }
+
+        func near(_ a: Date, _ b: Date) -> Bool { abs(a.timeIntervalSince(b)) < tolerance }
+
+        var episodeIDs = Set<UUID>()
+        var affectedPets = Set<UUID>()
+        for episode in demoEpisodes {
+            let now = episode.start.addingTimeInterval(seedEpisodes[episode.note]!)
+            func ago(_ days: Double) -> Date { now.addingTimeInterval(-days * day) }
+            let petID = episode.petID
+            episodeIDs.insert(episode.id)
+            affectedPets.insert(petID)
+
+            let seedEventDates = [61, 59, 58, 57.2, 1.1, 5.0 / 24].map(ago)
+            data.events.removeAll { event in
+                event.petID == petID && event.photoFilename == nil && event.note.isEmpty &&
+                    seedEventDates.contains { near($0, event.date) }
+            }
+            data.exposures.removeAll { exposure in
+                exposure.petID == petID && exposure.kind == .medStarted &&
+                    exposure.note == "joint supplement" && near(exposure.date, ago(2.5))
+            }
+            data.crossFeeds.removeAll { feed in
+                feed.eaterID == petID && feed.amount == "half the bowl" && near(feed.date, ago(2))
+            }
+            let seedItems: [(String, Double)] = [("Hill's i/d|food", 220), ("Puppy kibble|food", 90), ("Salmon kibble|food", 300)]
+            data.items.removeAll { item in
+                guard case .pet(let owner) = item.scope, owner == petID else { return false }
+                return seedItems.contains { $0.0 == "\(item.name)|\(item.kind)" && near(item.firstIntroduced, ago($0.1)) }
+            }
+        }
+        data.interventions.removeAll { $0.episodeID.map(episodeIDs.contains) ?? false }
+        data.episodes.removeAll { episodeIDs.contains($0.id) }
+
+        // The seed opened Navi in watch mode. Watch without an episode is
+        // meaningless, so a pet left that way goes back to baseline.
+        for index in data.pets.indices where affectedPets.contains(data.pets[index].id) {
+            let stillActive = data.episodes.contains { $0.petID == data.pets[index].id && $0.isActive }
+            if !stillActive, data.pets[index].mode == .watch {
+                data.pets[index].mode = .baseline
+            }
+        }
     }
 
     // MARK: - Lookups
@@ -345,6 +486,7 @@ final class AppStore: ObservableObject {
 
         var seeded = AppData()
         seeded.hasOnboarded = true
+        seeded.isDemo = true
         seeded.pets = [navi, albus, arya]
 
         seeded.items = [

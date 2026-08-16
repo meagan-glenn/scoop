@@ -49,6 +49,12 @@ struct CaptureSheet: View {
             }
             .navigationTitle(lookbackPetID == nil ? "Log a poop" : "48-hour lookback")
             .navigationBarTitleDisplayMode(.inline)
+            .onAppear {
+                // One animal in the house: there is nobody else to pick.
+                if petID == nil, store.activePets.count == 1 {
+                    petID = store.activePets[0].id
+                }
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -252,6 +258,13 @@ struct CaptureSheet: View {
             TierBadge(tier: liveTier)
             Spacer()
         }
+        // Saving with nobody selected used to be a silent no-op: tap, nothing.
+        if petID == nil {
+            Label("Pick who this is for at the top", systemImage: "arrow.up.circle")
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(Tier.monitor.color)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
         if liveTier == .urgent {
             VStack(spacing: 12) {
                 Label("This is one of the things vets want to know about promptly.",
@@ -271,9 +284,11 @@ struct CaptureSheet: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(Tier.urgent.color)
+                .disabled(petID == nil)
                 Button("Just save the log") { save() }
                     .font(.subheadline)
                     .foregroundColor(.secondary)
+                    .disabled(petID == nil)
             }
         } else {
             Button {
@@ -286,6 +301,7 @@ struct CaptureSheet: View {
             }
             .buttonStyle(.borderedProminent)
             .tint(liveTier == .normal ? Tier.normal.color : liveTier.color)
+            .disabled(petID == nil)
         }
     }
 

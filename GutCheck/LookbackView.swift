@@ -107,6 +107,8 @@ struct OutputRow: View {
     @EnvironmentObject var store: AppStore
     let event: OutputEvent
     @State private var showPhoto = false
+    /// Small, decoded once. The full-size image only loads for the sheet.
+    @State private var thumbnail: UIImage?
 
     var body: some View {
         HStack(spacing: 10) {
@@ -151,17 +153,27 @@ struct OutputRow: View {
         }
         .padding(10)
         .background(RoundedRectangle(cornerRadius: DS.rowRadius).fill(DS.surface))
+        .task(id: event.photoFilename) {
+            thumbnail = await loadImage(maxPixel: 132)
+        }
         .sheet(isPresented: $showPhoto) {
-            if let image = thumbnail {
-                ZoomablePhotoView(image: image)
-            }
+            PhotoSheetLoader(load: { await loadImage(maxPixel: nil) })
         }
     }
 
-    private var thumbnail: UIImage? {
-        guard let filename = event.photoFilename,
-              let data = try? Data(contentsOf: store.photoURL(filename)) else { return nil }
-        return UIImage(data: data)
+    /// Reads and decodes off the main thread; `maxPixel` downsamples for the
+    /// row so a 12-megapixel camera photo isn't decoded (and blurred) full size
+    /// inside a list.
+    private func loadImage(maxPixel: CGFloat?) async -> UIImage? {
+        guard let filename = event.photoFilename else { return nil }
+        let url = store.photoURL(filename)
+        return await Task.detached(priority: .userInitiated) {
+            guard let data = try? Data(contentsOf: url), let image = UIImage(data: data) else { return nil }
+            guard let maxPixel else { return image }
+            let scale = min(1, maxPixel / max(image.size.width, image.size.height))
+            let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+            return await image.byPreparingThumbnail(ofSize: size) ?? image
+        }.value
     }
 
     private var readingSummary: String {
@@ -173,25 +185,124 @@ struct OutputRow: View {
     }
 }
 
+/// The sheet body can't await; this loads the full image, then shows it.
+private struct PhotoSheetLoader: View {
+    let load: () async -> UIImage?
+    @State private var image: UIImage?
+
+    var body: some View {
+        Group {
+            if let image {
+                ZoomablePhotoView(image: image)
+            } else {
+                ZStack {
+                    Color.black.ignoresSafeArea()
+                    ProgressView().tint(.white)
+                }
+            }
+        }
+        .task { image = await load() }
+    }
+}
+
 /// Full-screen photo with pinch-to-zoom — the second-opinion flow means a
 /// partner is judging this image on their own phone.
+///
+/// Opens fitted to the screen and zooms from there. (A SwiftUI two-axis
+/// ScrollView gives a resizable image its native pixel size, which for a
+/// camera photo meant thousands of points of scrolling and no zoom at all.)
 struct ZoomablePhotoView: View {
     @Environment(\.dismiss) private var dismiss
     let image: UIImage
 
     var body: some View {
         NavigationStack {
-            ScrollView([.horizontal, .vertical]) {
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(maxWidth: UIScreen.main.bounds.width)
-            }
-            .background(Color.black)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { dismiss() }
+            ZoomableImage(image: image)
+                .ignoresSafeArea()
+                .background(Color.black)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Done") { dismiss() }
+                    }
                 }
+                .toolbarBackground(.visible, for: .navigationBar)
+                .toolbarColorScheme(.dark, for: .navigationBar)
+        }
+    }
+}
+
+/// UIScrollView does zoom-and-pan correctly out of the box; SwiftUI still
+/// doesn't. Fit on open, pinch to 4x, double-tap to toggle.
+private struct ZoomableImage: UIViewRepresentable {
+    let image: UIImage
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeUIView(context: Context) -> UIScrollView {
+        let scrollView = UIScrollView()
+        scrollView.delegate = context.coordinator
+        scrollView.backgroundColor = .black
+        scrollView.showsVerticalScrollIndicator = false
+        scrollView.showsHorizontalScrollIndicator = false
+        scrollView.contentInsetAdjustmentBehavior = .never
+        scrollView.decelerationRate = .fast
+        scrollView.maximumZoomScale = 4
+
+        let imageView = UIImageView(image: image)
+        imageView.contentMode = .scaleAspectFit
+        scrollView.addSubview(imageView)
+        context.coordinator.imageView = imageView
+
+        let doubleTap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.doubleTapped(_:)))
+        doubleTap.numberOfTapsRequired = 2
+        scrollView.addGestureRecognizer(doubleTap)
+        return scrollView
+    }
+
+    func updateUIView(_ scrollView: UIScrollView, context: Context) {
+        // Layout happens after SwiftUI sizes the view; fit once bounds exist.
+        DispatchQueue.main.async {
+            context.coordinator.fit(in: scrollView, imageSize: image.size)
+        }
+    }
+
+    final class Coordinator: NSObject, UIScrollViewDelegate {
+        weak var imageView: UIImageView?
+        private var fittedForBounds: CGSize = .zero
+
+        func fit(in scrollView: UIScrollView, imageSize: CGSize) {
+            guard let imageView, scrollView.bounds.size != .zero,
+                  scrollView.bounds.size != fittedForBounds, imageSize.width > 0, imageSize.height > 0 else { return }
+            fittedForBounds = scrollView.bounds.size
+            imageView.frame = CGRect(origin: .zero, size: imageSize)
+            scrollView.contentSize = imageSize
+            let scale = min(scrollView.bounds.width / imageSize.width, scrollView.bounds.height / imageSize.height)
+            scrollView.minimumZoomScale = scale
+            scrollView.zoomScale = scale
+            center(scrollView)
+        }
+
+        func viewForZooming(in scrollView: UIScrollView) -> UIView? { imageView }
+
+        func scrollViewDidZoom(_ scrollView: UIScrollView) { center(scrollView) }
+
+        /// Keep a smaller-than-viewport image centered instead of top-left.
+        private func center(_ scrollView: UIScrollView) {
+            let dx = max(0, (scrollView.bounds.width - scrollView.contentSize.width) / 2)
+            let dy = max(0, (scrollView.bounds.height - scrollView.contentSize.height) / 2)
+            scrollView.contentInset = UIEdgeInsets(top: dy, left: dx, bottom: dy, right: dx)
+        }
+
+        @objc func doubleTapped(_ gesture: UITapGestureRecognizer) {
+            guard let scrollView = gesture.view as? UIScrollView, let imageView else { return }
+            if scrollView.zoomScale > scrollView.minimumZoomScale + 0.01 {
+                scrollView.setZoomScale(scrollView.minimumZoomScale, animated: true)
+            } else {
+                let point = gesture.location(in: imageView)
+                let scale = min(scrollView.maximumZoomScale, scrollView.minimumZoomScale * 3)
+                let size = CGSize(width: scrollView.bounds.width / scale, height: scrollView.bounds.height / scale)
+                let rect = CGRect(x: point.x - size.width / 2, y: point.y - size.height / 2, width: size.width, height: size.height)
+                scrollView.zoom(to: rect, animated: true)
             }
         }
     }

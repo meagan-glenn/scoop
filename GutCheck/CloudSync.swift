@@ -13,7 +13,12 @@ import UIKit
 ///   in a `payload` field, plus a CKAsset for photos. Schema stays in one place.
 /// - Conflicts are last-writer-wins per record. Two people rarely edit the
 ///   same poop; the tradeoff is documented in the README.
-/// - `hasOnboarded` is device-local and never syncs.
+/// - `hasOnboarded` and `isDemo` are device-local and never sync.
+/// - The demo household is a local sandbox: while `isDemo` the engines stay
+///   down, so pretend animals never touch CloudKit and a real household never
+///   merges into the demo. Demo animals that older builds leaked into a real
+///   household are scrubbed (locally and from the zone) by
+///   `reconcileDemoData` at bootstrap and after every remote apply.
 /// - No iCloud account or no provisioned container: status goes .off and the
 ///   app is exactly as local-only as it was before this file existed.
 
@@ -122,15 +127,40 @@ final class CloudSync: NSObject, ObservableObject {
     private func bootstrap() async {
         let accountStatus = (try? await container.accountStatus()) ?? .couldNotDetermine
         guard accountStatus == .available else {
-            status = .off("Sign in to iCloud on this device to sync")
+            // No cloud to scrub, but the local view still gets cleaned; the
+            // zone catches up whenever an engine next sees those records.
+            if store?.reconcileDemoData() == true {
+                status = .off("Sync is off in the demo household")
+            } else {
+                status = .off("Sign in to iCloud on this device to sync")
+            }
+            return
+        }
+
+        // Already in the demo sandbox: don't bring the engines up at all, so
+        // no fetch can burn through real cloud changes while demo mode would
+        // ignore them.
+        if store?.data.isDemo == true {
+            demoStarted()
+            finishBootstrap()
             return
         }
 
         privateEngine = makeEngine(scope: .private, stateData: state.privateState)
         sharedEngine = makeEngine(scope: .shared, stateData: state.sharedState)
-
-        // Live before enqueueing: localDataChanged is a no-op unless live.
         status = .live(isOwner: isOwner)
+
+        // Demo hygiene before anything uploads. A demo household — flagged,
+        // or recognized from an older build that predates the flag — never
+        // syncs, so the engines go right back down. A real household that an
+        // older build polluted with demo animals is scrubbed here instead;
+        // with the engine live, the removals sync up as deletions and clean
+        // the zone too.
+        if store?.reconcileDemoData() == true {
+            demoStarted()
+            finishBootstrap()
+            return
+        }
 
         if isOwner {
             privateEngine?.state.add(pendingDatabaseChanges: [
@@ -151,13 +181,43 @@ final class CloudSync: NSObject, ObservableObject {
                                 "pending: \(privateEngine?.state.pendingRecordZoneChanges.count ?? -1)")
         }
 
-        didBootstrap = true
-        if let metadata = pendingShareMetadata {
-            pendingShareMetadata = nil
-            acceptShare(metadata)
-        } else {
+        if !finishBootstrap() {
             await fetchNow()
         }
+    }
+
+    /// Bootstrap is done (engines up, or deliberately down for the demo).
+    /// An invite that arrived early is accepted now; even from inside the
+    /// demo, since joining a real household is the one thing that beats
+    /// looking at a pretend one. Returns true when an invite was taken up.
+    @discardableResult
+    private func finishBootstrap() -> Bool {
+        didBootstrap = true
+        guard let metadata = pendingShareMetadata else { return false }
+        pendingShareMetadata = nil
+        acceptShare(metadata)
+        return true
+    }
+
+    // MARK: - Demo sandbox
+
+    /// The user is in the demo household: sync goes dark so pretend animals
+    /// never touch CloudKit.
+    func demoStarted() {
+        privateEngine = nil
+        sharedEngine = nil
+        status = .off("Sync is off in the demo household")
+    }
+
+    /// The user left the demo; bring sync back up around the real household.
+    /// Engine fetch state is dropped so anything the cloud holds re-fetches
+    /// from scratch — a change skipped during a demo window must not stay
+    /// remembered as seen.
+    func demoEnded() {
+        state.privateState = nil
+        state.sharedState = nil
+        saveState()
+        Task { await bootstrap() }
     }
 
     private func makeEngine(scope: CKDatabase.Scope, stateData: CKSyncEngine.State.Serialization?) -> CKSyncEngine {
@@ -185,6 +245,9 @@ final class CloudSync: NSObject, ObservableObject {
     // MARK: - Local → cloud
 
     private func localDataChanged(old: AppData, new: AppData) {
+        // Demo data never uploads — and leaving the demo (demo → empty) has
+        // nothing to delete, because nothing was ever sent.
+        guard !old.isDemo, !new.isDemo else { return }
         guard case .live = status, let engine = householdEngine else { return }
         var changes: [CKSyncEngine.PendingRecordZoneChange] = []
         changes += diff(old.pets, new.pets, prefix: RecordKind.pet)
@@ -304,7 +367,10 @@ final class CloudSync: NSObject, ObservableObject {
     // MARK: - Cloud → local
 
     private func applyRemote(modified: [CKRecord], deleted: [CKRecord.ID]) {
-        guard let store else { return }
+        // Belt and braces: the engines are torn down in demo mode, but if a
+        // fetch is already in flight the cloud household must not merge into
+        // the demo sandbox.
+        guard let store, !store.data.isDemo else { return }
         store.isApplyingRemote = true
         defer { store.isApplyingRemote = false }
 
@@ -503,6 +569,16 @@ final class CloudSync: NSObject, ObservableObject {
                     store.isApplyingRemote = false
                 }
                 saveState()
+                // Joining from inside the demo sandbox: the engines were torn
+                // down, and the demo's fetch state must not be trusted. Bring
+                // them back up fresh so the household actually comes down.
+                if sharedEngine == nil {
+                    state.privateState = nil
+                    state.sharedState = nil
+                    saveState()
+                    privateEngine = makeEngine(scope: .private, stateData: nil)
+                    sharedEngine = makeEngine(scope: .shared, stateData: nil)
+                }
                 status = .live(isOwner: false)
                 try? await sharedEngine?.fetchChanges()
             } catch {
@@ -537,6 +613,12 @@ extension CloudSync: CKSyncEngineDelegate {
                 modified: changes.modifications.map(\.record),
                 deleted: changes.deletions.map(\.recordID)
             )
+            // Demo records an older build left in the zone arrive like any
+            // other change; scrub them (the deletions echo back up) — or, if
+            // the zone holds nothing but the demo, drop into the sandbox.
+            if store?.reconcileDemoData() == true {
+                demoStarted()
+            }
 
         case .fetchedDatabaseChanges(let changes):
             // Losing the joined zone means the owner stopped sharing.
