@@ -490,6 +490,18 @@ final class CloudSync: NSObject, ObservableObject {
                 let zoneID = metadata.share.recordID.zoneID
                 state.joinedZone = ZoneRef(zoneName: zoneID.zoneName, ownerName: zoneID.ownerName)
                 state.didInitialUpload = true // participants never bulk-upload local data
+                // Joining replaces local data (v1 rule): drop whatever this
+                // phone had, including a demo household, and let the shared
+                // zone fill it back in. Cached system fields belong to the old
+                // zone and must go too.
+                state.systemFields = [:]
+                if let store {
+                    store.isApplyingRemote = true
+                    var fresh = AppData()
+                    fresh.hasOnboarded = true
+                    store.data = fresh
+                    store.isApplyingRemote = false
+                }
                 saveState()
                 status = .live(isOwner: false)
                 try? await sharedEngine?.fetchChanges()
