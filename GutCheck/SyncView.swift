@@ -38,24 +38,19 @@ struct SyncSheet: View {
                             Text("Everyone you invite sees the same animals and logs the same record, from their own phone.")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
-                            if let url = share?.url {
-                                ShareLink(item: url, subject: Text("Join our Scoop household"),
-                                          message: Text("Tap this on your phone to see the same animals and logs I do.")) {
-                                    Label("Send invite link", systemImage: "link")
+                            if share != nil {
+                                Button {
+                                    presentSharingController()
+                                } label: {
+                                    Label("Invite someone", systemImage: "person.badge.plus")
                                         .font(.subheadline.weight(.semibold))
                                         .frame(maxWidth: .infinity)
                                         .padding(.vertical, 8)
                                 }
                                 .buttonStyle(.borderedProminent)
-                                Button {
-                                    presentSharingController()
-                                } label: {
-                                    Label("Manage who's in", systemImage: "person.2")
-                                        .font(.subheadline.weight(.semibold))
-                                        .frame(maxWidth: .infinity)
-                                        .padding(.vertical, 8)
-                                }
-                                .buttonStyle(.bordered)
+                                Text("Add someone by contact, or switch to \"anyone with the link\" in the sheet's options and text the link.")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
                             } else {
                                 Button {
                                     prepareShare()
@@ -141,6 +136,7 @@ struct SyncSheet: View {
             defer { isPreparingShare = false }
             do {
                 share = try await CloudSync.shared.fetchOrCreateShare()
+                presentSharingController()
             } catch {
                 shareError = "Couldn't start sharing: \(error.localizedDescription)"
             }

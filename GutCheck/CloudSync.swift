@@ -48,6 +48,10 @@ final class CloudSync: NSObject, ObservableObject {
     private var state = PersistedState()
     /// An invite that arrived before start() ran (cold launch from a share link).
     private var pendingShareMetadata: CKShare.Metadata?
+    /// A share waiting to go up through the private engine's next batch.
+    private var pendingShare: CKShare?
+    private var savedShare: CKShare?
+    private var shareSaveError: Error?
     private var didBootstrap = false
 
     // MARK: - Persisted sync state
@@ -226,6 +230,9 @@ final class CloudSync: NSObject, ObservableObject {
 
     /// Build the outgoing record: cached system fields (change tag) + payload.
     private func makeRecord(for id: CKRecord.ID) -> CKRecord? {
+        if id.recordName == CKRecordNameZoneWideShare, let pendingShare, pendingShare.recordID == id {
+            return pendingShare
+        }
         guard let data = store?.data, let (kind, uuid) = parse(recordName: id.recordName) else { return nil }
 
         var payload: Data?
@@ -367,6 +374,43 @@ final class CloudSync: NSObject, ObservableObject {
 
     // MARK: - Sharing
 
+    /// Append a raw diagnostic dump to Documents/scoop-debug.log so it can be
+    /// pulled off a device with devicectl when no console is attached.
+    static func debugDump(_ lines: String...) {
+        let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("scoop-debug.log")
+        let text = "\n===== \(Date()) =====\n" + lines.joined(separator: "\n") + "\n"
+        if let handle = try? FileHandle(forWritingTo: url) {
+            handle.seekToEndOfFile()
+            handle.write(text.data(using: .utf8)!)
+            try? handle.close()
+        } else {
+            try? text.write(to: url, atomically: true, encoding: .utf8)
+        }
+    }
+
+    /// Unwrap CloudKit's nested errors into one readable line for the UI.
+    static func describe(_ error: Error) -> String {
+        var parts: [String] = []
+        var current: Error? = error
+        var depth = 0
+        while let e = current, depth < 4 {
+            let ns = e as NSError
+            var line = "\(ns.domain) \(ns.code)"
+            if let ck = e as? CKError { line = "CloudKit \(ck.code) (\(ck.errorCode))" }
+            if let server = ns.userInfo["ServerErrorDescription"] as? String { line += ": \(server)" }
+            else if let desc = ns.userInfo[NSLocalizedDescriptionKey] as? String { line += ": \(desc)" }
+            if let partial = ns.userInfo[CKPartialErrorsByItemIDKey] as? [AnyHashable: Error],
+               let first = partial.values.first {
+                line += " [partial: \(describe(first))]"
+            }
+            parts.append(line)
+            current = ns.userInfo[NSUnderlyingErrorKey] as? Error
+            depth += 1
+        }
+        return parts.joined(separator: " <- ")
+    }
+
     /// Fetch the household zone's existing zone-wide share, or create one.
     /// The household's share if one has been created, without creating one.
     func existingShare() async throws -> CKShare? {
@@ -375,33 +419,46 @@ final class CloudSync: NSObject, ObservableObject {
     }
 
     func fetchOrCreateShare() async throws -> CKShare {
+        if let savedShare { return savedShare }
         let database = container.privateCloudDatabase
         let shareID = CKRecord.ID(recordName: CKRecordNameZoneWideShare, zoneID: ownZoneID)
         if let existing = try? await database.record(for: shareID) as? CKShare {
-            if existing.publicPermission == .none {
-                existing.publicPermission = .readWrite
-                let (results, _) = try await database.modifyRecords(saving: [existing], deleting: [])
-                for (_, result) in results {
-                    if let saved = try? result.get() as? CKShare { return saved }
-                }
-            }
+            savedShare = existing
             return existing
         }
-        // The sync engine creates the zone asynchronously; make sure it exists
-        // before saving a share into it, or a fresh install fails with
-        // zoneNotFound on the first tap.
-        _ = try await database.modifyRecordZones(saving: [CKRecordZone(zoneID: ownZoneID)], deleting: [])
+        guard let engine = privateEngine else {
+            throw NSError(domain: "Scoop", code: 3, userInfo: [NSLocalizedDescriptionKey: "Sync isn't running yet. Try again in a moment."])
+        }
+        // Route the share through the sync engine, the same path every other
+        // record takes. Saving it out-of-band while the engine owns the zone
+        // is what CloudKit rejects with an internal error.
         let share = CKShare(recordZoneID: ownZoneID)
         share[CKShare.SystemFieldKey.title] = "Scoop household" as CKRecordValue
-        // Anyone with the link joins with read/write, like a Notes invite link.
-        // The link is unguessable; a household of a few people doesn't need
-        // per-person invitations.
-        share.publicPermission = .readWrite
-        let (saveResults, _) = try await database.modifyRecords(saving: [share], deleting: [])
-        for (_, result) in saveResults {
-            if let saved = try? result.get() as? CKShare { return saved }
+        // Created private; the system sharing sheet lets the owner add
+        // people or switch to "anyone with the link". Setting a public
+        // permission at creation is what the server rejects (15 / 2000).
+        share.publicPermission = .none
+        pendingShare = share
+        shareSaveError = nil
+        engine.state.add(pendingDatabaseChanges: [.saveZone(CKRecordZone(zoneID: ownZoneID))])
+        engine.state.add(pendingRecordZoneChanges: [.saveRecord(share.recordID)])
+        var sendError: Error?
+        do { try await engine.sendChanges() } catch { sendError = error }
+        if let savedShare { return savedShare }
+        if let error = (shareSaveError ?? sendError) {
+            CloudSync.debugDump("share save failed",
+                                "shareSaveError: \(String(reflecting: shareSaveError as Any))",
+                                "sendError: \(String(reflecting: sendError as Any))",
+                                "zone: \(ownZoneID)")
+            throw NSError(domain: "Scoop", code: 5,
+                          userInfo: [NSLocalizedDescriptionKey: CloudSync.describe(error)])
         }
-        throw CKError(.internalError)
+        // Nothing came back yet; read it from the server.
+        if let fetched = try? await database.record(for: shareID) as? CKShare {
+            savedShare = fetched
+            return fetched
+        }
+        throw NSError(domain: "Scoop", code: 4, userInfo: [NSLocalizedDescriptionKey: "The share didn't come back from iCloud. Try again."])
     }
 
     /// The partner tapped the invite link; from here the household lives in
@@ -464,9 +521,19 @@ extension CloudSync: CKSyncEngineDelegate {
 
         case .sentRecordZoneChanges(let sent):
             for record in sent.savedRecords {
+                if let share = record as? CKShare {
+                    savedShare = share
+                    pendingShare = nil
+                    continue
+                }
                 cacheSystemFields(of: record)
             }
             for failure in sent.failedRecordSaves {
+                if failure.record.recordID.recordName == CKRecordNameZoneWideShare {
+                    shareSaveError = failure.error
+                    pendingShare = nil
+                    continue
+                }
                 switch failure.error.code {
                 case .serverRecordChanged:
                     // Someone else wrote first. Take their change tag and
