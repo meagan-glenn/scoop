@@ -187,11 +187,13 @@ final class CloudSync: NSObject, ObservableObject {
             // never uploaded the real ones. Idempotent, and cheap when the
             // zone is current.
             let unsynced = enqueueUnsyncedRecords()
+            // ...and anything the server has since lost, cache or no cache.
+            let missing = await requeueRecordsMissingFromServer()
             state.didInitialUpload = true
             saveState()
             CloudSync.debugDump("bootstrap owner",
                                 "pets: \(store?.data.pets.count ?? -1) events: \(store?.data.events.count ?? -1)",
-                                "unsynced queued: \(unsynced) systemFields: \(state.systemFields.count)",
+                                "unsynced queued: \(unsynced) missing on server: \(missing) systemFields: \(state.systemFields.count)",
                                 "pending: \(privateEngine?.state.pendingRecordZoneChanges.count ?? -1)")
         }
 
@@ -346,6 +348,14 @@ final class CloudSync: NSObject, ObservableObject {
     @discardableResult
     private func enqueueUnsyncedRecords() -> Int {
         guard case .live = status, let engine = householdEngine, let data = store?.data else { return 0 }
+        let unsynced = localRecordIDs(in: data).filter { state.systemFields[$0.recordName] == nil }
+        guard !unsynced.isEmpty else { return 0 }
+        engine.state.add(pendingRecordZoneChanges: unsynced.map { .saveRecord($0) })
+        return unsynced.count
+    }
+
+    /// Every record ID the local data would map to, in the household zone.
+    private func localRecordIDs(in data: AppData) -> [CKRecord.ID] {
         var ids: [CKRecord.ID] = []
         ids += data.pets.map { recordID(.pet, $0.id) }
         ids += data.items.map { recordID(.item, $0.id) }
@@ -354,10 +364,45 @@ final class CloudSync: NSObject, ObservableObject {
         ids += data.crossFeeds.map { recordID(.crossFeed, $0.id) }
         ids += data.episodes.map { recordID(.episode, $0.id) }
         ids += data.exposures.map { recordID(.exposure, $0.id) }
-        let unsynced = ids.filter { state.systemFields[$0.recordName] == nil }
-        guard !unsynced.isEmpty else { return 0 }
-        engine.state.add(pendingRecordZoneChanges: unsynced.map { .saveRecord($0) })
-        return unsynced.count
+        return ids
+    }
+
+    /// Owner only: ask the server which of the local records it actually
+    /// holds, and re-queue any it doesn't. The system-fields cache says a
+    /// record was saved *once*; it can't know the record was deleted since
+    /// (a partner phone on an old build scrubbed "demo" animals out of the
+    /// shared zone, and the owner's real animals went with them while the
+    /// owner's cache still vouched for them). Returns how many were
+    /// re-queued; -1 when the check itself failed.
+    private func requeueRecordsMissingFromServer() async -> Int {
+        guard isOwner, case .live = status, let engine = privateEngine, let data = store?.data else { return 0 }
+        let ids = localRecordIDs(in: data)
+        guard !ids.isEmpty else { return 0 }
+        let database = container.privateCloudDatabase
+        var missing: [CKRecord.ID] = []
+        for chunk in stride(from: 0, to: ids.count, by: 200).map({ Array(ids[$0..<min($0 + 200, ids.count)]) }) {
+            do {
+                let results = try await database.records(for: chunk, desiredKeys: [])
+                for (id, result) in results {
+                    if case .failure(let error) = result,
+                       (error as? CKError)?.code == .unknownItem {
+                        missing.append(id)
+                    }
+                }
+            } catch let error as CKError where error.code == .zoneNotFound {
+                // No zone yet: everything is missing, and the engine's queued
+                // saveZone + the unsynced pass will create it all.
+                missing = ids
+                break
+            } catch {
+                CloudSync.debugDump("server check failed", CloudSync.describe(error))
+                return -1
+            }
+        }
+        guard !missing.isEmpty else { return 0 }
+        for id in missing { state.systemFields[id.recordName] = nil }
+        engine.state.add(pendingRecordZoneChanges: missing.map { .saveRecord($0) })
+        return missing.count
     }
 
     // MARK: - Record mapping
