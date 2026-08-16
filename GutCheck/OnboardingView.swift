@@ -83,6 +83,8 @@ struct OnboardingFlow: View {
                     } else {
                         Button("Just looking? Load a demo household") {
                             store.resetToSeed()
+                            // Pretend animals stay on this phone.
+                            CloudSync.shared.demoStarted()
                         }
                         .font(.footnote)
                     }

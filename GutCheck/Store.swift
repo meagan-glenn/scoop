@@ -10,6 +10,10 @@ struct AppData: Codable {
     var episodes: [Episode] = []
     var exposures: [ExposureEvent] = []
     var hasOnboarded: Bool = false
+    /// True while this device is exploring the bundled demo household. Demo
+    /// data is a local sandbox: it never uploads to CloudKit and a real
+    /// household must never merge into it.
+    var isDemo: Bool = false
 
     init() {}
 
@@ -25,6 +29,7 @@ struct AppData: Codable {
         exposures = try container.decodeIfPresent([ExposureEvent].self, forKey: .exposures) ?? []
         // Files written before onboarding existed already have a household.
         hasOnboarded = try container.decodeIfPresent(Bool.self, forKey: .hasOnboarded) ?? !pets.isEmpty
+        isDemo = try container.decodeIfPresent(Bool.self, forKey: .isDemo) ?? false
     }
 }
 
@@ -72,6 +77,75 @@ final class AppStore: ObservableObject {
 
     func resetToSeed() {
         data = AppStore.seed()
+    }
+
+    /// Leaves the demo sandbox entirely: demo data is discarded and the app
+    /// returns to onboarding. Nothing in the demo ever synced, so there is
+    /// nothing to undo in the cloud.
+    func exitDemo() {
+        data = AppData()
+    }
+
+    // MARK: - Demo hygiene
+
+    /// The seed animals, identifiable by their exact signature. Used to scrub
+    /// demo animals that older builds accidentally synced into a real
+    /// household via CloudKit.
+    private static let seedPetSignatures: Set<String> = [
+        "Navi|Dog|Cattle dog mix|🐕",
+        "Albus|Dog|Golden retriever|🦮",
+        "Arya|Dog|Border collie|🐶",
+    ]
+
+    /// Household-scoped seed items carry no pet ID, so they are matched the
+    /// same way the seed pets are: by exact signature.
+    private static let seedHouseholdItemSignatures: Set<String> = [
+        "Bully sticks|chew",
+        "Yak cheese chew|chew",
+    ]
+
+    private static func isSeedPet(_ pet: Pet) -> Bool {
+        pet.photoFilename == nil &&
+            seedPetSignatures.contains("\(pet.name)|\(pet.species.rawValue)|\(pet.breed)|\(pet.avatar)")
+    }
+
+    /// Older builds could upload the demo household to CloudKit and later
+    /// merge it into a real one. Straightens that out:
+    ///
+    /// - A household that is nothing but the seed is the demo itself (loaded
+    ///   on a build before the flag existed) — it gets re-flagged as the demo
+    ///   sandbox rather than wiped out from under the user.
+    /// - A real household with seed animals mixed in gets them removed, along
+    ///   with every record that references them. The removal is a normal
+    ///   local mutation, so when sync is live the deletions propagate and
+    ///   scrub the cloud copy too.
+    ///
+    /// Returns true when the data is (or turned out to be) the demo sandbox,
+    /// which the sync layer takes as its cue to stay down.
+    @discardableResult
+    func reconcileDemoData() -> Bool {
+        guard !data.isDemo else { return true }
+        let demoIDs = Set(data.pets.filter(Self.isSeedPet).map(\.id))
+        guard !demoIDs.isEmpty else { return false }
+        if demoIDs.count == data.pets.count {
+            data.isDemo = true
+            return true
+        }
+        var cleaned = data
+        cleaned.pets.removeAll { demoIDs.contains($0.id) }
+        cleaned.events.removeAll { demoIDs.contains($0.petID) }
+        cleaned.interventions.removeAll { demoIDs.contains($0.petID) }
+        cleaned.crossFeeds.removeAll { demoIDs.contains($0.eaterID) || demoIDs.contains($0.foodOwnerID) }
+        cleaned.episodes.removeAll { demoIDs.contains($0.petID) }
+        cleaned.exposures.removeAll { $0.petID.map(demoIDs.contains) ?? false }
+        cleaned.items.removeAll { item in
+            switch item.scope {
+            case .pet(let owner): return demoIDs.contains(owner)
+            case .household: return Self.seedHouseholdItemSignatures.contains("\(item.name)|\(item.kind)")
+            }
+        }
+        data = cleaned
+        return false
     }
 
     // MARK: - Lookups
@@ -345,6 +419,7 @@ final class AppStore: ObservableObject {
 
         var seeded = AppData()
         seeded.hasOnboarded = true
+        seeded.isDemo = true
         seeded.pets = [navi, albus, arya]
 
         seeded.items = [
