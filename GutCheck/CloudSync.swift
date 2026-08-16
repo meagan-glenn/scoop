@@ -129,18 +129,28 @@ final class CloudSync: NSObject, ObservableObject {
         privateEngine = makeEngine(scope: .private, stateData: state.privateState)
         sharedEngine = makeEngine(scope: .shared, stateData: state.sharedState)
 
+        // Live before enqueueing: localDataChanged is a no-op unless live.
+        status = .live(isOwner: isOwner)
+
         if isOwner {
             privateEngine?.state.add(pendingDatabaseChanges: [
                 .saveZone(CKRecordZone(zoneID: ownZoneID)),
             ])
-            if !state.didInitialUpload {
+            // First launch, or nothing has ever been confirmed saved (for
+            // example every earlier send failed before the zone existed):
+            // put the whole household back in the queue.
+            let anyRecordSynced = state.systemFields.keys.contains { parse(recordName: $0) != nil }
+            if !state.didInitialUpload || !anyRecordSynced {
                 enqueueAllRecords()
                 state.didInitialUpload = true
                 saveState()
             }
+            CloudSync.debugDump("bootstrap owner",
+                                "pets: \(store?.data.pets.count ?? -1) events: \(store?.data.events.count ?? -1)",
+                                "anyRecordSynced: \(anyRecordSynced) systemFields: \(state.systemFields.count)",
+                                "pending: \(privateEngine?.state.pendingRecordZoneChanges.count ?? -1)")
         }
 
-        status = .live(isOwner: isOwner)
         didBootstrap = true
         if let metadata = pendingShareMetadata {
             pendingShareMetadata = nil
@@ -163,6 +173,11 @@ final class CloudSync: NSObject, ObservableObject {
     /// Called on scene-foreground; cheap when nothing changed.
     func fetchNow() async {
         guard case .live = status else { return }
+        // Push first so anything logged offline goes up before we pull. The
+        // engine schedules its own sends too, but lazily; foreground is when
+        // the user expects it to be current.
+        try? await privateEngine?.sendChanges()
+        try? await sharedEngine?.sendChanges()
         try? await privateEngine?.fetchChanges()
         try? await sharedEngine?.fetchChanges()
     }
@@ -294,7 +309,7 @@ final class CloudSync: NSObject, ObservableObject {
         defer { store.isApplyingRemote = false }
 
         var data = store.data
-        for record in modified {
+        for record in modified where !(record is CKShare) {
             upsert(record, into: &data)
             cacheSystemFields(of: record)
         }
