@@ -162,13 +162,18 @@ final class CloudSync: NSObject, ObservableObject {
             return
         }
 
+        // A participant's private engine has nothing household-shaped to
+        // send: the household lives in the owner's zone. Anything still
+        // queued there is left over from before this phone joined (early
+        // builds queued demo animals in the own zone), and trying to send it
+        // is what crashed builds 1 through 6 on the partner's phone.
+        dropStalePrivateQueue()
+
         // Joined someone's household but holding no animals: whatever the
-        // fetch token says, this phone is not caught up. Start the shared
-        // fetch over from nothing rather than trust it.
-        if !isOwner, store?.data.pets.isEmpty == true, state.sharedState != nil {
-            state.sharedState = nil
-            sharedEngine = makeEngine(scope: .shared, stateData: nil)
-            saveState()
+        // engine's fetch token says, this phone is not caught up. Pull the
+        // whole zone once, outside the engine, and apply it the normal way.
+        if !isOwner, store?.data.pets.isEmpty == true, let zoneID = state.joinedZone?.zoneID {
+            await refetchZone(zoneID)
         }
 
         if isOwner {
@@ -249,6 +254,44 @@ final class CloudSync: NSObject, ObservableObject {
         try? await sharedEngine?.sendChanges()
         try? await privateEngine?.fetchChanges()
         try? await sharedEngine?.fetchChanges()
+    }
+
+    /// Participants: forget every pending record change in the private
+    /// engine (see bootstrap).
+    private func dropStalePrivateQueue() {
+        guard !isOwner, let engine = privateEngine else { return }
+        let pending = engine.state.pendingRecordZoneChanges
+        guard !pending.isEmpty else { return }
+        engine.state.remove(pendingRecordZoneChanges: pending)
+        CloudSync.debugDump("participant: dropped \(pending.count) stale private-zone pending changes")
+    }
+
+    /// One full pass over a zone with no change token, applied through the
+    /// same path engine fetches use. For "joined but empty" recovery only;
+    /// the engine remains the steady-state fetcher.
+    private func refetchZone(_ zoneID: CKRecordZone.ID) async {
+        let database = container.database(with: zoneID.ownerName == CKCurrentUserDefaultName ? .private : .shared)
+        var modified: [CKRecord] = []
+        var deleted: [CKRecord.ID] = []
+        var more = true
+        var token: CKServerChangeToken?
+        while more {
+            do {
+                let result = try await database.recordZoneChanges(inZoneWith: zoneID, since: token)
+                modified += result.modificationResultsByID.values.compactMap { try? $0.get().record }
+                deleted += result.deletions.map(\.recordID)
+                token = result.changeToken
+                more = result.moreComing
+            } catch {
+                CloudSync.debugDump("refetchZone failed", CloudSync.describe(error), "zone: \(zoneID)")
+                return
+            }
+        }
+        CloudSync.debugDump("refetchZone", "zone: \(zoneID)", "modified: \(modified.count) deleted: \(deleted.count)")
+        applyRemote(modified: modified, deleted: deleted)
+        if store?.reconcileDemoData() == true {
+            demoStarted()
+        }
     }
 
     // MARK: - Local → cloud
@@ -363,14 +406,22 @@ final class CloudSync: NSObject, ObservableObject {
         }
         guard let payload else { return nil } // deleted locally since being queued
 
-        let record: CKRecord
+        // Cached fields are keyed by record name only. If the phone changed
+        // zones since (joined a household), the cached copy can belong to a
+        // different zone; handing that back for this ID trips a CloudKit
+        // assertion (seen in the build 1 crash logs). A cache that doesn't
+        // match is dropped and the record goes up fresh.
+        var cachedRecord: CKRecord?
         if let cached = state.systemFields[id.recordName],
            let coder = try? NSKeyedUnarchiver(forReadingFrom: cached) {
             coder.requiresSecureCoding = true
-            record = CKRecord(coder: coder) ?? CKRecord(recordType: kind.rawValue, recordID: id)
-        } else {
-            record = CKRecord(recordType: kind.rawValue, recordID: id)
+            cachedRecord = CKRecord(coder: coder)
+            if cachedRecord?.recordID != id {
+                cachedRecord = nil
+                state.systemFields[id.recordName] = nil
+            }
         }
+        let record = cachedRecord ?? CKRecord(recordType: kind.rawValue, recordID: id)
         record["payload"] = payload as CKRecordValue
         if let photoFilename, let store {
             let url = store.photoURL(photoFilename)
@@ -592,19 +643,22 @@ final class CloudSync: NSObject, ObservableObject {
                     store.isApplyingRemote = false
                 }
                 saveState()
-                // Local data was just replaced, so the shared engine's fetch
-                // token must go too: a token that already "saw" this zone
-                // (an earlier join, or the demo's engines) would leave the
-                // household permanently empty. Rebuild it fresh so the whole
-                // zone comes down. Same for a private engine the demo tore down.
-                state.sharedState = nil
-                sharedEngine = makeEngine(scope: .shared, stateData: nil)
-                if privateEngine == nil {
+                // Joining from inside the demo: the engines were torn down;
+                // bring them up fresh (no stale demo-era tokens).
+                if sharedEngine == nil {
                     state.privateState = nil
+                    state.sharedState = nil
+                    saveState()
                     privateEngine = makeEngine(scope: .private, stateData: nil)
+                    sharedEngine = makeEngine(scope: .shared, stateData: nil)
                 }
-                saveState()
+                dropStalePrivateQueue()
                 status = .live(isOwner: false)
+                // Local data was just replaced, and the shared engine's token
+                // may already have "seen" this zone (an earlier join). Don't
+                // trust it: pull the whole zone once, then let the engine
+                // carry on with deltas.
+                await refetchZone(zoneID)
                 try? await sharedEngine?.fetchChanges()
             } catch {
                 status = .off("Couldn't join the household: \(error.localizedDescription)")
