@@ -33,6 +33,10 @@ targets:
       base:
         GENERATE_INFOPLIST_FILE: YES
         PRODUCT_BUNDLE_IDENTIFIER: com.meagan.scoop
+        # Meagan's individual Apple Developer team. Automatic signing registers
+        # the App ID, CloudKit container, and profiles on first device build.
+        DEVELOPMENT_TEAM: MRV697X79G
+        CODE_SIGN_STYLE: Automatic
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
         TARGETED_DEVICE_FAMILY: "1"
