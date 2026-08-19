@@ -155,3 +155,42 @@ struct SectionHeader: View {
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
+
+/// "Just now / Earlier today / Yesterday" chips, plus a clock-time picker that
+/// appears for the retroactive options so the user picks the real time instead
+/// of the app guessing one.
+struct TimingPicker: View {
+    @Binding var timing: LogTiming
+    @Binding var pickedTime: Date
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            FlowLayout(spacing: 8) {
+                ForEach(LogTiming.allCases) { option in
+                    Chip(label: option.label, isSelected: timing == option, tint: .accentColor) {
+                        if timing != option {
+                            timing = option
+                            pickedTime = option.defaultDate
+                        }
+                    }
+                }
+            }
+            if timing.needsTime {
+                HStack {
+                    Text(timing == .yesterday ? "Around what time yesterday?" : "Around what time?")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    DatePicker("Time", selection: $pickedTime, in: timing.range, displayedComponents: .hourAndMinute)
+                        .labelsHidden()
+                        .datePickerStyle(.compact)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(RoundedRectangle(cornerRadius: 12).fill(Color(.secondarySystemBackground)))
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: timing)
+    }
+}

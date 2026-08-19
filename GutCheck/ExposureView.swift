@@ -10,6 +10,7 @@ struct ExposureSheet: View {
     @State private var petID: UUID?
     @State private var wholeHousehold = false
     @State private var timing: LogTiming = .justNow
+    @State private var pickedTime: Date = Date()
     @State private var note = ""
 
     private let medKinds: [ExposureKind] = [.medStarted, .medChanged]
@@ -63,20 +64,14 @@ struct ExposureSheet: View {
                     }
 
                     SectionHeader(title: "When?")
-                    FlowLayout(spacing: 8) {
-                        ForEach(LogTiming.allCases) { option in
-                            Chip(label: option.label, isSelected: timing == option, tint: .accentColor) {
-                                timing = option
-                            }
-                        }
-                    }
+                    TimingPicker(timing: $timing, pickedTime: $pickedTime)
 
                     PillTextField(placeholder: "Note", text: $note)
 
                     Button {
                         guard let kind = kind else { return }
                         let target = soloPet?.id ?? (wholeHousehold ? nil : petID)
-                        store.logExposure(kind: kind, petID: target, note: note, date: timing.date)
+                        store.logExposure(kind: kind, petID: target, note: note, date: timing.resolve(pickedTime: pickedTime))
                         dismiss()
                     } label: {
                         Text("Log it")

@@ -19,6 +19,7 @@ struct CaptureSheet: View {
     @State var petID: UUID?
     @State private var reading: StoolReading = .normal
     @State private var timing: LogTiming = .justNow
+    @State private var pickedTime: Date = Date()
     @State private var note = ""
     @State private var photoItem: PhotosPickerItem?
     @State private var photoData: Data?
@@ -217,13 +218,7 @@ struct CaptureSheet: View {
                 }
 
                 axisSection(title: "When?", tier: .normal) {
-                    chipWrap {
-                        ForEach(LogTiming.allCases) { option in
-                            Chip(label: option.label, isSelected: timing == option, tint: .accentColor) {
-                                timing = option
-                            }
-                        }
-                    }
+                    TimingPicker(timing: $timing, pickedTime: $pickedTime)
                 }
 
                 PillTextField(placeholder: "Note", text: $note)
@@ -347,7 +342,7 @@ struct CaptureSheet: View {
     private func save() {
         guard let petID = petID else { return }
         let filename = photoData.map { store.savePhoto($0) }
-        let result = store.logOutput(petID: petID, reading: reading, note: note, photoFilename: filename, date: timing.date)
+        let result = store.logOutput(petID: petID, reading: reading, note: note, photoFilename: filename, date: timing.resolve(pickedTime: pickedTime))
         savedResult = result
         if result.suggestWatch {
             showWatchPrompt = true

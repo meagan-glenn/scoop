@@ -214,7 +214,11 @@ enum LogTiming: String, CaseIterable, Identifiable {
         }
     }
 
-    var date: Date {
+    /// Whether the user should be offered a clock-time picker for this choice.
+    var needsTime: Bool { self != .justNow }
+
+    /// Sensible starting point for the time picker when this option is chosen.
+    var defaultDate: Date {
         let now = Date()
         switch self {
         case .justNow:
@@ -225,6 +229,36 @@ enum LogTiming: String, CaseIterable, Identifiable {
             return max(floor, now.addingTimeInterval(-6 * 3600))
         case .yesterday:
             return now.addingTimeInterval(-24 * 3600)
+        }
+    }
+
+    /// Valid picker range: the chosen day, never in the future.
+    var range: ClosedRange<Date> {
+        let cal = Calendar.current
+        let now = Date()
+        let today = cal.startOfDay(for: now)
+        switch self {
+        case .justNow:
+            return now...now
+        case .earlierToday:
+            return today...now
+        case .yesterday:
+            let yStart = cal.date(byAdding: .day, value: -1, to: today) ?? today
+            return yStart...today.addingTimeInterval(-60)
+        }
+    }
+
+    /// Final timestamp: the chosen day combined with the picked clock time.
+    func resolve(pickedTime: Date) -> Date {
+        switch self {
+        case .justNow:
+            return Date()
+        case .earlierToday, .yesterday:
+            let cal = Calendar.current
+            let day = cal.startOfDay(for: range.lowerBound)
+            let hm = cal.dateComponents([.hour, .minute], from: pickedTime)
+            let combined = cal.date(bySettingHour: hm.hour ?? 0, minute: hm.minute ?? 0, second: 0, of: day) ?? day
+            return min(max(combined, range.lowerBound), range.upperBound)
         }
     }
 }
