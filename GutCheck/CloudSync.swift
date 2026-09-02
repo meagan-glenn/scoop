@@ -324,6 +324,7 @@ final class CloudSync: NSObject, ObservableObject {
         changes += diff(old.crossFeeds, new.crossFeeds, prefix: RecordKind.crossFeed)
         changes += diff(old.episodes, new.episodes, prefix: RecordKind.episode)
         changes += diff(old.exposures, new.exposures, prefix: RecordKind.exposure)
+        changes += diff(old.intakes, new.intakes, prefix: RecordKind.intake)
         guard !changes.isEmpty else { return }
         engine.state.add(pendingRecordZoneChanges: changes)
     }
@@ -364,6 +365,7 @@ final class CloudSync: NSObject, ObservableObject {
         ids += data.crossFeeds.map { recordID(.crossFeed, $0.id) }
         ids += data.episodes.map { recordID(.episode, $0.id) }
         ids += data.exposures.map { recordID(.exposure, $0.id) }
+        ids += data.intakes.map { recordID(.intake, $0.id) }
         return ids
     }
 
@@ -415,6 +417,7 @@ final class CloudSync: NSObject, ObservableObject {
         case crossFeed = "CrossFeed"
         case episode = "Episode"
         case exposure = "Exposure"
+        case intake = "Intake"
     }
 
     private func recordID(_ kind: RecordKind, _ id: UUID) -> CKRecord.ID {
@@ -461,6 +464,8 @@ final class CloudSync: NSObject, ObservableObject {
             payload = data.episodes.first { $0.id == uuid }.flatMap { try? encoder.encode($0) }
         case .exposure:
             payload = data.exposures.first { $0.id == uuid }.flatMap { try? encoder.encode($0) }
+        case .intake:
+            payload = data.intakes.first { $0.id == uuid }.flatMap { try? encoder.encode($0) }
         }
         guard let payload else { return nil } // deleted locally since being queued
 
@@ -555,6 +560,8 @@ final class CloudSync: NSObject, ObservableObject {
             if let value = try? decoder.decode(Episode.self, from: payload) { replace(value, in: &data.episodes) }
         case .exposure:
             if let value = try? decoder.decode(ExposureEvent.self, from: payload) { replace(value, in: &data.exposures) }
+        case .intake:
+            if let value = try? decoder.decode(IntakeEvent.self, from: payload) { replace(value, in: &data.intakes) }
         }
     }
 
@@ -582,6 +589,7 @@ final class CloudSync: NSObject, ObservableObject {
         case .crossFeed: data.crossFeeds.removeAll { $0.id == id }
         case .episode: data.episodes.removeAll { $0.id == id }
         case .exposure: data.exposures.removeAll { $0.id == id }
+        case .intake: data.intakes.removeAll { $0.id == id }
         }
     }
 

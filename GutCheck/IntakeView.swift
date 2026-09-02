@@ -1,0 +1,798 @@
+import SwiftUI
+
+// MARK: - "Gave something" (food, treats, meds, supplements)
+
+/// Log that an animal got something, by name. Meds and treats share one sheet
+/// because they share one question: what went in, and when. A repeat is two
+/// taps (chip, log); the first time, the item is created in place.
+struct IntakeSheet: View {
+    @EnvironmentObject var store: AppStore
+    @Environment(\.dismiss) private var dismiss
+
+    @State var petID: UUID?
+    /// Pre-select an item (from the regimen list, say).
+    var preselectedItemID: UUID? = nil
+
+    @State private var selectedItemID: UUID?
+    @State private var creatingNew = false
+    @State private var newName = ""
+    @State private var newKind: ItemKind = .treat
+    @State private var newDose = ""
+    @State private var newSchedule: Set<DoseSlot> = []
+    @State private var amount = ""
+    @State private var slot: DoseSlot?
+    @State private var timing: LogTiming = .justNow
+    @State private var pickedTime: Date = Date()
+    @State private var note = ""
+
+    private var soloPet: Pet? {
+        store.activePets.count == 1 ? store.activePets.first : nil
+    }
+
+    private var effectivePetID: UUID? { soloPet?.id ?? petID }
+
+    private var selectedItem: Item? {
+        selectedItemID.flatMap { store.item($0) }
+    }
+
+    private var canSave: Bool {
+        guard effectivePetID != nil else { return false }
+        if creatingNew {
+            return !newName.trimmingCharacters(in: .whitespaces).isEmpty
+        }
+        return selectedItemID != nil
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    Text("A piece of banana today is a bad stool tomorrow. Name it now and the record can connect the two.")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+
+                    if soloPet == nil {
+                        SectionHeader(title: "Who?")
+                        PetPickerRow(selection: $petID)
+                    }
+
+                    SectionHeader(title: "What?")
+                    whatSection
+
+                    if let item = selectedItem, item.isScheduled, !creatingNew {
+                        SectionHeader(title: "Which dose?")
+                        FlowLayout(spacing: 8) {
+                            ForEach(item.schedule) { option in
+                                Chip(label: option.label, isSelected: slot == option, tint: .accentColor) {
+                                    slot = option
+                                }
+                            }
+                            Chip(label: "Extra dose", isSelected: slot == nil, tint: .accentColor) {
+                                slot = nil
+                            }
+                        }
+                    }
+
+                    SectionHeader(title: "How much?")
+                    PillTextField(placeholder: amountPlaceholder, text: $amount)
+
+                    SectionHeader(title: "When?")
+                    TimingPicker(timing: $timing, pickedTime: $pickedTime)
+
+                    PillTextField(placeholder: "Note", text: $note)
+
+                    Button {
+                        save()
+                    } label: {
+                        Text("Log it")
+                            .font(.headline)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 6)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!canSave)
+                }
+                .padding()
+            }
+            .navigationTitle("Food & meds")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+            .onAppear {
+                if petID == nil, store.activePets.count == 1 {
+                    petID = store.activePets[0].id
+                }
+                if let preselectedItemID, selectedItemID == nil {
+                    select(preselectedItemID)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var whatSection: some View {
+        let recent = effectivePetID.map { store.recentItems(for: $0) }
+            ?? store.data.items.filter { $0.isActive && $0.scope == .household }
+        FlowLayout(spacing: 8) {
+            ForEach(recent) { item in
+                Chip(label: item.name, isSelected: selectedItemID == item.id && !creatingNew, tint: item.kind.tint) {
+                    creatingNew = false
+                    select(item.id)
+                }
+            }
+            Chip(label: recent.isEmpty ? "Something new" : "+ Something new", isSelected: creatingNew, tint: .accentColor) {
+                creatingNew = true
+                selectedItemID = nil
+                slot = nil
+            }
+        }
+        if creatingNew {
+            NewItemFields(name: $newName, kind: $newKind, dose: $newDose, schedule: $newSchedule)
+                .onChange(of: newDose) { _, value in
+                    if amount.isEmpty || amount == newDose { amount = value }
+                }
+        }
+    }
+
+    private var amountPlaceholder: String {
+        if let item = selectedItem, !item.dose.isEmpty { return item.dose }
+        switch (creatingNew ? newKind : selectedItem?.kind) ?? .treat {
+        case .med, .supplement: return "e.g. 250mg, 1 capsule"
+        case .food: return "e.g. half a bowl"
+        case .treat, .chew: return "e.g. a few bites"
+        }
+    }
+
+    private func select(_ id: UUID) {
+        selectedItemID = id
+        guard let item = store.item(id) else { return }
+        amount = item.dose
+        slot = item.isScheduled ? DoseSlot.current() : nil
+        if item.isScheduled, !item.schedule.contains(slot ?? .morning) {
+            slot = item.schedule.first
+        }
+    }
+
+    private func save() {
+        guard let petID = effectivePetID else { return }
+        let date = timing.resolve(pickedTime: pickedTime)
+        var itemID = selectedItemID
+        var doseSlot = slot
+        if creatingNew {
+            let schedule = newKind.isRegimen ? DoseSlot.allCases.filter { newSchedule.contains($0) } : []
+            let item = Item(name: newName.trimmingCharacters(in: .whitespaces),
+                            scope: newKind.defaultsToHousehold ? .household : .pet(petID),
+                            kind: newKind,
+                            firstIntroduced: date,
+                            dose: newDose.trimmingCharacters(in: .whitespaces),
+                            schedule: schedule,
+                            trackedSince: Date())
+            store.addItem(item)
+            itemID = item.id
+            doseSlot = schedule.isEmpty ? nil : (schedule.contains(DoseSlot.current(at: date)) ? DoseSlot.current(at: date) : schedule.first)
+            if !schedule.isEmpty {
+                Task { await DoseReminders.shared.requestAuthorization() }
+            }
+        }
+        guard let itemID else { return }
+        store.logIntake(petID: petID, itemID: itemID, date: date,
+                        amount: amount.trimmingCharacters(in: .whitespaces),
+                        slot: doseSlot, note: note)
+        dismiss()
+    }
+}
+
+/// Horizontal avatar picker, shared by the sheets that need a "who".
+struct PetPickerRow: View {
+    @EnvironmentObject var store: AppStore
+    @Binding var selection: UUID?
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 16) {
+            ForEach(store.activePets) { pet in
+                let isSelected = selection == pet.id
+                Button {
+                    selection = pet.id
+                } label: {
+                    VStack(spacing: 5) {
+                        PetAvatar(pet: pet, size: 54)
+                            .overlay(Circle().stroke(isSelected ? DS.brand : .clear, lineWidth: 2.5))
+                        Text(pet.name)
+                            .font(.caption.weight(isSelected ? .bold : .regular))
+                            .foregroundColor(isSelected ? DS.brand : .secondary)
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+            Spacer()
+        }
+    }
+}
+
+/// The fields that define a new item, shared by the in-place create and the
+/// full editor. Schedule only appears for meds and supplements.
+struct NewItemFields: View {
+    @Binding var name: String
+    @Binding var kind: ItemKind
+    @Binding var dose: String
+    @Binding var schedule: Set<DoseSlot>
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            PillTextField(placeholder: "Name — banana, metronidazole, CBD oil", text: $name)
+            FlowLayout(spacing: 8) {
+                ForEach(ItemKind.allCases) { option in
+                    Chip(label: option.label, isSelected: kind == option, tint: option.tint) {
+                        kind = option
+                        if !option.isRegimen { schedule = [] }
+                    }
+                }
+            }
+            if kind.isRegimen {
+                PillTextField(placeholder: "Usual dose — 250mg, 1 tsp, 0.5ml", text: $dose)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Every day?")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    HStack(spacing: 8) {
+                        ForEach(DoseSlot.allCases) { slot in
+                            Chip(label: "\(slot.label) · \(slot.hourLabel)", isSelected: schedule.contains(slot), tint: .accentColor) {
+                                if schedule.contains(slot) { schedule.remove(slot) } else { schedule.insert(slot) }
+                            }
+                        }
+                    }
+                    Text(schedule.isEmpty
+                         ? "Leave both off for an as-needed med."
+                         : "You'll get a reminder at each time, and missed doses show up in the record.")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+            }
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: DS.rowRadius).fill(DS.surface))
+    }
+}
+
+// MARK: - Item editor
+
+/// Create or edit one item for one animal. Stopping keeps it; deleting is
+/// for mistakes.
+struct ItemEditSheet: View {
+    @EnvironmentObject var store: AppStore
+    @Environment(\.dismiss) private var dismiss
+
+    let petID: UUID
+    private let existing: Item?
+
+    @State private var name: String
+    @State private var kind: ItemKind
+    @State private var dose: String
+    @State private var schedule: Set<DoseSlot>
+    @State private var started: Date
+    @State private var showDeleteConfirm = false
+
+    init(petID: UUID, item: Item? = nil, defaultKind: ItemKind = .med) {
+        self.petID = petID
+        self.existing = item
+        _name = State(initialValue: item?.name ?? "")
+        _kind = State(initialValue: item?.kind ?? defaultKind)
+        _dose = State(initialValue: item?.dose ?? "")
+        _schedule = State(initialValue: Set(item?.schedule ?? []))
+        _started = State(initialValue: item?.firstIntroduced ?? Date())
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    NewItemFields(name: $name, kind: $kind, dose: $dose, schedule: $schedule)
+
+                    SectionHeader(title: existing == nil ? "Started" : "Started on")
+                    DatePicker("Started", selection: $started, in: ...Date(), displayedComponents: .date)
+                        .labelsHidden()
+                        .datePickerStyle(.compact)
+                    if existing == nil, !schedule.isEmpty {
+                        Text("Backdating the start doesn't invent missed doses — tracking begins today.")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+
+                    Button {
+                        save()
+                    } label: {
+                        Text(existing == nil ? "Add it" : "Save")
+                            .font(.headline)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 6)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
+
+                    if let existing {
+                        if existing.isActive {
+                            Button {
+                                store.stopItem(id: existing.id)
+                                dismiss()
+                            } label: {
+                                Text("Stopped giving this")
+                                    .font(.subheadline.weight(.semibold))
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 6)
+                            }
+                            .buttonStyle(.bordered)
+                        } else {
+                            Button {
+                                var restarted = existing
+                                restarted.stopped = nil
+                                restarted.trackedSince = Date()
+                                store.updateItem(restarted)
+                                dismiss()
+                            } label: {
+                                Text("Started again")
+                                    .font(.subheadline.weight(.semibold))
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 6)
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                        Button(role: .destructive) {
+                            showDeleteConfirm = true
+                        } label: {
+                            Text("Delete, including every dose logged")
+                                .font(.footnote)
+                                .frame(maxWidth: .infinity)
+                        }
+                        .confirmationDialog("Delete \(existing.name)?", isPresented: $showDeleteConfirm, titleVisibility: .visible) {
+                            Button("Delete it and its history", role: .destructive) {
+                                store.removeItem(id: existing.id)
+                                dismiss()
+                            }
+                            Button("Keep", role: .cancel) {}
+                        } message: {
+                            Text("Use “Stopped giving this” to end a course and keep the record.")
+                        }
+                    }
+                }
+                .padding()
+            }
+            .navigationTitle(existing == nil ? "New item" : existing!.name)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private func save() {
+        let orderedSchedule = kind.isRegimen ? DoseSlot.allCases.filter { schedule.contains($0) } : []
+        if var item = existing {
+            let wasScheduled = item.isScheduled
+            item.name = name.trimmingCharacters(in: .whitespaces)
+            item.kind = kind
+            item.dose = dose.trimmingCharacters(in: .whitespaces)
+            item.schedule = orderedSchedule
+            item.firstIntroduced = started
+            if !wasScheduled, !orderedSchedule.isEmpty { item.trackedSince = Date() }
+            store.updateItem(item)
+        } else {
+            let item = Item(name: name.trimmingCharacters(in: .whitespaces),
+                            scope: kind.defaultsToHousehold ? .household : .pet(petID),
+                            kind: kind,
+                            firstIntroduced: started,
+                            dose: dose.trimmingCharacters(in: .whitespaces),
+                            schedule: orderedSchedule,
+                            trackedSince: Date())
+            store.addItem(item)
+        }
+        if !orderedSchedule.isEmpty {
+            Task { await DoseReminders.shared.requestAuthorization() }
+        }
+        dismiss()
+    }
+}
+
+// MARK: - Regimen (the pet's meds & supplements)
+
+struct RegimenSheet: View {
+    @EnvironmentObject var store: AppStore
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var reminders = DoseReminders.shared
+    let petID: UUID
+
+    @State private var editing: Item?
+    @State private var adding = false
+
+    var body: some View {
+        let pet = store.pet(petID)
+        let active = store.regimen(for: petID)
+        let stopped = store.items(for: petID).filter { $0.kind.isRegimen && !$0.isActive }
+            .sorted { ($0.stopped ?? .distantPast) > ($1.stopped ?? .distantPast) }
+
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    Text("\(pet?.name ?? "Their")'s meds and supplements. Scheduled ones get a checklist and a reminder; the rest are logged as they happen.")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+
+                    if reminders.authorization == .denied, !active.filter(\.isScheduled).isEmpty {
+                        Label("Reminders are off in Settings → Notifications → Scoop. The checklist still works.", systemImage: "bell.slash")
+                            .font(.caption)
+                            .foregroundColor(Tier.monitor.color)
+                            .padding(10)
+                            .background(RoundedRectangle(cornerRadius: DS.rowRadius).fill(Tier.monitor.color.opacity(0.08)))
+                    }
+
+                    if active.isEmpty {
+                        Text("Nothing yet.")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    } else {
+                        SectionHeader(title: "Current")
+                        ForEach(active) { item in
+                            Button { editing = item } label: { RegimenRow(item: item) }
+                                .buttonStyle(.plain)
+                        }
+                    }
+
+                    Button {
+                        adding = true
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: "plus.circle.fill")
+                            Text("Add a med or supplement")
+                                .font(.subheadline.weight(.semibold))
+                        }
+                        .foregroundColor(.accentColor)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .background(
+                            RoundedRectangle(cornerRadius: DS.radius)
+                                .strokeBorder(Color.secondary.opacity(0.35), style: StrokeStyle(lineWidth: 1.5, dash: [6, 5]))
+                        )
+                    }
+                    .buttonStyle(.plain)
+
+                    if !stopped.isEmpty {
+                        SectionHeader(title: "Stopped")
+                        ForEach(stopped) { item in
+                            Button { editing = item } label: { RegimenRow(item: item) }
+                                .buttonStyle(.plain)
+                        }
+                    }
+                }
+                .padding()
+            }
+            .navigationTitle("\(pet?.name ?? "")'s meds")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+            .sheet(item: $editing) { item in
+                ItemEditSheet(petID: petID, item: item)
+            }
+            .sheet(isPresented: $adding) {
+                ItemEditSheet(petID: petID)
+            }
+        }
+    }
+}
+
+struct RegimenRow: View {
+    let item: Item
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: item.kind.symbol)
+                .foregroundColor(item.isActive ? item.kind.tint : .secondary)
+                .frame(width: 24)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.name + (item.dose.isEmpty ? "" : " · \(item.dose)"))
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.primary)
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            Spacer()
+            Image(systemName: "chevron.right")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: DS.rowRadius).fill(DS.surface))
+    }
+
+    private var subtitle: String {
+        if let stopped = item.stopped {
+            return "Stopped \(relativeDay(stopped)) · started \(shortDate(item.firstIntroduced))"
+        }
+        let when = item.schedule.isEmpty ? "As needed" : item.schedule.map(\.label).joined(separator: " & ")
+        return "\(when) · since \(shortDate(item.firstIntroduced))"
+    }
+}
+
+// MARK: - Today's checklist
+
+/// Per-item ticks for today, grouped by slot. One tap gives; tapping a given
+/// dose again clears it. Long-press to record a deliberate skip.
+struct DoseChecklist: View {
+    @EnvironmentObject var store: AppStore
+    let petID: UUID
+    var day: Date = Date()
+
+    var body: some View {
+        let slots = DoseSlot.allCases.filter { !store.scheduledItems(for: petID, slot: $0).isEmpty }
+        if !slots.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(slots) { slot in
+                    slotBlock(slot)
+                }
+                if let missedYesterday = missedYesterdayLine {
+                    Text(missedYesterday)
+                        .font(.caption2)
+                        .foregroundColor(Tier.monitor.color)
+                }
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: DS.radius).fill(DS.surface))
+        }
+    }
+
+    @ViewBuilder
+    private func slotBlock(_ slot: DoseSlot) -> some View {
+        let items = store.scheduledItems(for: petID, slot: slot)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: slot.symbol)
+                    .font(.caption)
+                Text("\(slot.label) · \(slot.hourLabel)")
+                    .font(.caption.weight(.semibold))
+                Spacer()
+                if let summary = store.slotSummary(petID: petID, slot: slot, day: day) {
+                    Text(summaryLabel(summary))
+                        .font(.caption2.weight(.semibold))
+                        .foregroundColor(summaryColor(summary))
+                }
+            }
+            .foregroundColor(.secondary)
+            ForEach(items) { item in
+                let state = store.doseState(petID: petID, item: item, slot: slot, day: day)
+                Button {
+                    store.setDose(petID: petID, item: item, slot: slot, day: day, status: state.isLogged ? nil : .given)
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: checkSymbol(state))
+                            .font(.title3)
+                            .foregroundColor(checkColor(state))
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(item.name + (item.dose.isEmpty ? "" : " · \(item.dose)"))
+                                .font(.subheadline)
+                                .foregroundColor(.primary)
+                                .strikethrough(isSkipped(state), color: .secondary)
+                            if let detail = stateDetail(state) {
+                                Text(detail)
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        Spacer()
+                    }
+                }
+                .buttonStyle(.plain)
+                .contextMenu {
+                    if !isSkipped(state) {
+                        Button {
+                            store.setDose(petID: petID, item: item, slot: slot, day: day, status: .skipped)
+                        } label: {
+                            Label("Skipped on purpose", systemImage: "minus.circle")
+                        }
+                    }
+                    if state.isLogged {
+                        Button(role: .destructive) {
+                            store.setDose(petID: petID, item: item, slot: slot, day: day, status: nil)
+                        } label: {
+                            Label("Clear", systemImage: "arrow.uturn.backward")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var missedYesterdayLine: String? {
+        guard let yesterday = Calendar.current.date(byAdding: .day, value: -1, to: Calendar.current.startOfDay(for: day)) else { return nil }
+        let missed = store.missedDoses(for: petID, from: yesterday, to: day)
+        guard !missed.isEmpty else { return nil }
+        let names = missed.map { "\($0.item.name) (\($0.slot.label.lowercased()))" }
+        return "Missed yesterday: " + names.joined(separator: ", ")
+    }
+
+    private func isSkipped(_ state: DoseState) -> Bool {
+        if case .skipped = state { return true }
+        return false
+    }
+
+    private func checkSymbol(_ state: DoseState) -> String {
+        switch state {
+        case .given: return "checkmark.circle.fill"
+        case .skipped: return "minus.circle.fill"
+        case .due, .missed: return "circle"
+        case .upcoming: return "circle.dotted"
+        }
+    }
+
+    private func checkColor(_ state: DoseState) -> Color {
+        switch state {
+        case .given: return Tier.normal.color
+        case .skipped: return .secondary
+        case .due, .missed: return Tier.monitor.color
+        case .upcoming: return .secondary
+        }
+    }
+
+    private func stateDetail(_ state: DoseState) -> String? {
+        switch state {
+        case .given(let intake): return "Given \(timeOnly(intake.date))"
+        case .skipped: return "Skipped"
+        case .due: return "Due"
+        case .missed: return "Missed"
+        case .upcoming: return nil
+        }
+    }
+
+    private func summaryLabel(_ summary: AppStore.SlotSummary) -> String {
+        if summary.isComplete { return "Done" }
+        switch summary.pending {
+        case .due: return "\(summary.given) of \(summary.total)"
+        case .missed: return "Missed"
+        default: return summary.given > 0 ? "\(summary.given) of \(summary.total)" : "Later"
+        }
+    }
+
+    private func summaryColor(_ summary: AppStore.SlotSummary) -> Color {
+        if summary.isComplete { return Tier.normal.color }
+        if case .due = summary.pending { return Tier.monitor.color }
+        if case .missed = summary.pending { return Tier.concern.color }
+        return .secondary
+    }
+}
+
+/// One-tap slot pills for the home screen: "Morning ✓ · Evening due".
+/// Tapping an incomplete slot gives everything in it; tapping a complete one
+/// clears it (the mis-tap must be undoable in the same place).
+struct DoseStrip: View {
+    @EnvironmentObject var store: AppStore
+    let petID: UUID
+
+    var body: some View {
+        let summaries = DoseSlot.allCases.compactMap { store.slotSummary(petID: petID, slot: $0) }
+        if !summaries.isEmpty {
+            HStack(spacing: 8) {
+                ForEach(summaries, id: \.slot) { summary in
+                    Button {
+                        if summary.isComplete {
+                            store.clearSlot(petID: petID, slot: summary.slot)
+                        } else {
+                            store.giveSlot(petID: petID, slot: summary.slot)
+                        }
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: summary.isComplete ? "checkmark.circle.fill" : summary.slot.symbol)
+                                .font(.caption)
+                            Text(label(summary))
+                                .font(.caption.weight(.semibold))
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 7)
+                        .background(Capsule().fill(color(summary).opacity(0.14)))
+                        .foregroundColor(color(summary))
+                    }
+                    .buttonStyle(.plain)
+                }
+                Spacer()
+            }
+        }
+    }
+
+    private func label(_ summary: AppStore.SlotSummary) -> String {
+        if summary.isComplete { return "\(summary.slot.label) given" }
+        switch summary.pending {
+        case .due: return summary.given > 0 ? "\(summary.slot.label) \(summary.given) of \(summary.total)" : "\(summary.slot.label) due"
+        case .missed: return "\(summary.slot.label) missed"
+        default: return "\(summary.slot.label) \(summary.slot.hourLabel)"
+        }
+    }
+
+    private func color(_ summary: AppStore.SlotSummary) -> Color {
+        if summary.isComplete { return Tier.normal.color }
+        if case .due = summary.pending { return Tier.monitor.color }
+        if case .missed = summary.pending { return Tier.concern.color }
+        return .secondary
+    }
+}
+
+// MARK: - Timeline row
+
+struct IntakeRow: View {
+    @EnvironmentObject var store: AppStore
+    let intake: IntakeEvent
+
+    var body: some View {
+        let item = store.item(intake.itemID)
+        let kind = item?.kind ?? .treat
+        HStack(spacing: 10) {
+            Image(systemName: intake.status == .skipped ? "minus.circle" : kind.symbol)
+                .foregroundColor(intake.status == .skipped ? .secondary : kind.tint)
+                .frame(width: 24)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title(item))
+                    .font(.subheadline)
+                    .strikethrough(intake.status == .skipped, color: .secondary)
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            Spacer()
+            Text(shortDateTime(intake.date))
+                .font(.caption2)
+                .foregroundColor(.secondary)
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: DS.rowRadius).fill(DS.surface))
+    }
+
+    private func title(_ item: Item?) -> String {
+        let name = item?.name ?? "Unknown item"
+        return intake.amount.isEmpty ? name : "\(name) · \(intake.amount)"
+    }
+
+    private var subtitle: String {
+        var parts: [String] = []
+        if intake.status == .skipped { parts.append("Skipped") }
+        if let slot = intake.slot { parts.append("\(slot.label) dose") } else if store.item(intake.itemID)?.kind.isRegimen == true {
+            parts.append("Extra dose")
+        }
+        if !intake.note.isEmpty { parts.append("“\(intake.note)”") }
+        return parts.isEmpty ? (store.item(intake.itemID)?.kind.label ?? "") : parts.joined(separator: " · ")
+    }
+}
+
+// MARK: - Small helpers
+
+extension ItemKind {
+    var tint: Color {
+        switch self {
+        case .med: return Tier.concern.color
+        case .supplement: return Tier.normal.color
+        case .food: return DS.brand
+        case .treat: return Color(red: 0.48, green: 0.35, blue: 0.72)
+        case .chew: return Color(red: 0.48, green: 0.35, blue: 0.72)
+        }
+    }
+}
+
+extension DoseSlot {
+    /// "7am" / "7pm"
+    var hourLabel: String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "ha"
+        return formatter.string(from: dueDate(on: Date())).lowercased()
+    }
+}
+
+func timeOnly(_ date: Date) -> String {
+    let formatter = DateFormatter()
+    formatter.dateStyle = .none
+    formatter.timeStyle = .short
+    return formatter.string(from: date)
+}
