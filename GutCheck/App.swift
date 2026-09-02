@@ -54,6 +54,7 @@ struct GutCheckApp: App {
                 .accentColor(DS.brand)
                 .task {
                     CloudSync.shared.start(store: store)
+                    DoseReminders.shared.attach(store: store)
                 }
                 .onChange(of: scenePhase) { _, phase in
                     if phase == .active {

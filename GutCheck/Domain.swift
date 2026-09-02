@@ -450,20 +450,235 @@ enum ItemScope: Codable, Equatable {
     case pet(UUID)
 }
 
+/// What an item is. Meals, meds and supplements are per-animal; treats and
+/// chews are usually handed out house-wide (PRD: "treats are chaos").
+enum ItemKind: String, Codable, CaseIterable, Identifiable {
+    case med
+    case supplement
+    case food
+    case treat
+    case chew
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .med: return "Medication"
+        case .supplement: return "Supplement"
+        case .food: return "Food"
+        case .treat: return "Treat / table food"
+        case .chew: return "Chew"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .med: return "pills.fill"
+        case .supplement: return "leaf.fill"
+        case .food: return "bowl.fill"
+        case .treat: return "fork.knife"
+        case .chew: return "circle.grid.cross.fill"
+        }
+    }
+
+    /// Meds and supplements are a regimen: they can be scheduled and their
+    /// adherence matters. Food, treats and chews are one-off intake.
+    var isRegimen: Bool { self == .med || self == .supplement }
+
+    /// Household by default for the chaotic categories; per-pet otherwise.
+    var defaultsToHousehold: Bool { self == .treat || self == .chew }
+}
+
+/// The two daily dosing slots. Reminders fire at `hour` local time.
+enum DoseSlot: String, Codable, CaseIterable, Identifiable {
+    case morning
+    case evening
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .morning: return "Morning"
+        case .evening: return "Evening"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .morning: return "sunrise.fill"
+        case .evening: return "moon.stars.fill"
+        }
+    }
+
+    /// Reminder hour, 24h local time.
+    var hour: Int {
+        switch self {
+        case .morning: return 7
+        case .evening: return 19
+        }
+    }
+
+    /// The slot's due time on a given calendar day.
+    func dueDate(on day: Date, calendar: Calendar = .current) -> Date {
+        let start = calendar.startOfDay(for: day)
+        return calendar.date(bySettingHour: hour, minute: 0, second: 0, of: start) ?? start
+    }
+
+    /// Which slot "now" most naturally belongs to — used to pre-select a slot
+    /// when logging a scheduled dose without a checklist tap.
+    static func current(at date: Date = Date(), calendar: Calendar = .current) -> DoseSlot {
+        calendar.component(.hour, from: date) < 14 ? .morning : .evening
+    }
+}
+
+/// A named thing the animal gets: a med, a supplement, a food, a treat. Named
+/// so that the third time banana shows up before an episode, the app can say
+/// so — a free-text note never becomes a pattern.
 struct Item: Identifiable, Codable, Equatable {
     var id: UUID
     var name: String
     var scope: ItemScope
-    var kind: String // food, treat, chew, med, supplement, water
+    var kind: ItemKind
+    /// When it entered the animal's life (a course start, a new bag of food).
     var firstIntroduced: Date
+    /// Default amount per dose — "250mg", "1 tsp", "a few bites".
+    var dose: String
+    /// Daily slots this is due in. Empty = as needed / one-off.
+    var schedule: [DoseSlot]
+    /// Adherence is only counted from here: backdating "started two weeks
+    /// ago" must not invent two weeks of missed doses.
+    var trackedSince: Date
+    /// Set when a course ends. Kept, not deleted — history matters.
+    var stopped: Date?
 
-    init(id: UUID = UUID(), name: String, scope: ItemScope, kind: String, firstIntroduced: Date) {
+    init(id: UUID = UUID(), name: String, scope: ItemScope, kind: ItemKind, firstIntroduced: Date,
+         dose: String = "", schedule: [DoseSlot] = [], trackedSince: Date? = nil, stopped: Date? = nil) {
         self.id = id
         self.name = name
         self.scope = scope
         self.kind = kind
         self.firstIntroduced = firstIntroduced
+        self.dose = dose
+        self.schedule = schedule
+        self.trackedSince = trackedSince ?? firstIntroduced
+        self.stopped = stopped
     }
+
+    // Tolerant decoding: `kind` was a free string before it became an enum,
+    // and every field after it was added later.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        scope = try container.decodeIfPresent(ItemScope.self, forKey: .scope) ?? .household
+        let rawKind = try container.decodeIfPresent(String.self, forKey: .kind) ?? ""
+        kind = ItemKind(rawValue: rawKind) ?? .treat
+        firstIntroduced = try container.decodeIfPresent(Date.self, forKey: .firstIntroduced) ?? Date()
+        dose = try container.decodeIfPresent(String.self, forKey: .dose) ?? ""
+        schedule = try container.decodeIfPresent([DoseSlot].self, forKey: .schedule) ?? []
+        trackedSince = try container.decodeIfPresent(Date.self, forKey: .trackedSince) ?? firstIntroduced
+        stopped = try container.decodeIfPresent(Date.self, forKey: .stopped)
+    }
+
+    var isActive: Bool { stopped == nil }
+    var isScheduled: Bool { isActive && !schedule.isEmpty }
+
+    func applies(to pet: UUID) -> Bool {
+        switch scope {
+        case .household: return true
+        case .pet(let owner): return owner == pet
+        }
+    }
+
+    /// Whether a scheduled dose was expected on this day.
+    func isDue(on day: Date, calendar: Calendar = .current) -> Bool {
+        guard !schedule.isEmpty else { return false }
+        let dayStart = calendar.startOfDay(for: day)
+        let dayEnd = dayStart.addingTimeInterval(24 * 3600)
+        guard trackedSince < dayEnd else { return false }
+        if let stopped, stopped < dayStart { return false }
+        return true
+    }
+}
+
+enum IntakeStatus: String, Codable {
+    case given
+    /// Deliberately not given (vet said pause, animal wouldn't take it).
+    /// Recorded so the checklist stops asking and the record stays honest.
+    case skipped
+}
+
+/// "Albus got X." The record behind the checklist tick, the banana log, and
+/// every adherence and attribution count.
+struct IntakeEvent: Identifiable, Codable, Equatable {
+    var id: UUID
+    var petID: UUID
+    var itemID: UUID
+    var date: Date
+    var amount: String
+    /// The scheduled slot this satisfies; nil for an ad-hoc dose or a treat.
+    var slot: DoseSlot?
+    var status: IntakeStatus
+    var note: String
+
+    init(id: UUID = UUID(), petID: UUID, itemID: UUID, date: Date, amount: String = "",
+         slot: DoseSlot? = nil, status: IntakeStatus = .given, note: String = "") {
+        self.id = id
+        self.petID = petID
+        self.itemID = itemID
+        self.date = date
+        self.amount = amount
+        self.slot = slot
+        self.status = status
+        self.note = note
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        petID = try container.decode(UUID.self, forKey: .petID)
+        itemID = try container.decode(UUID.self, forKey: .itemID)
+        date = try container.decode(Date.self, forKey: .date)
+        amount = try container.decodeIfPresent(String.self, forKey: .amount) ?? ""
+        slot = try container.decodeIfPresent(DoseSlot.self, forKey: .slot)
+        status = try container.decodeIfPresent(IntakeStatus.self, forKey: .status) ?? .given
+        note = try container.decodeIfPresent(String.self, forKey: .note) ?? ""
+    }
+}
+
+/// State of one scheduled slot on one day, derived rather than stored so a
+/// missed dose needs no background job to be recorded.
+enum DoseState: Equatable {
+    case given(IntakeEvent)
+    case skipped(IntakeEvent)
+    /// Slot time has passed today and nothing is logged.
+    case due
+    /// The day ended with nothing logged.
+    case missed
+    /// Slot time hasn't arrived yet today.
+    case upcoming
+
+    var isLogged: Bool {
+        switch self {
+        case .given, .skipped: return true
+        default: return false
+        }
+    }
+}
+
+/// Pure slot-state rule, shared by the checklist, the lookback and the summary.
+func doseState(intakes: [IntakeEvent], slot: DoseSlot, day: Date, now: Date = Date(),
+               calendar: Calendar = .current) -> DoseState {
+    let dayStart = calendar.startOfDay(for: day)
+    let dayEnd = dayStart.addingTimeInterval(24 * 3600)
+    let logged = intakes
+        .filter { $0.slot == slot && $0.date >= dayStart && $0.date < dayEnd }
+        .sorted { $0.date > $1.date }
+    if let latest = logged.first {
+        return latest.status == .given ? .given(latest) : .skipped(latest)
+    }
+    if now >= dayEnd { return .missed }
+    return now >= slot.dueDate(on: day, calendar: calendar) ? .due : .upcoming
 }
 
 struct OutputEvent: Identifiable, Codable, Equatable {

@@ -11,6 +11,8 @@ struct PetScreen: View {
     @State private var showCapture = false
     @State private var showSummary = false
     @State private var showEdit = false
+    @State private var showRegimen = false
+    @State private var showIntake = false
     @State private var showEndEpisodeConfirm = false
 
     var body: some View {
@@ -37,14 +39,25 @@ struct PetScreen: View {
                     .buttonStyle(.borderedProminent)
 
                     Button {
+                        showRegimen = true
+                    } label: {
+                        Label("Meds", systemImage: "pills.fill")
+                            .padding(.vertical, 8)
+                            .padding(.horizontal, 2)
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button {
                         showEdit = true
                     } label: {
                         Label("Edit", systemImage: "slider.horizontal.3")
                             .padding(.vertical, 8)
-                            .padding(.horizontal, 4)
+                            .padding(.horizontal, 2)
                     }
                     .buttonStyle(.bordered)
                 }
+
+                regimenSection
 
                 if let episode = episode {
                     episodeContext(episode: episode)
@@ -68,7 +81,12 @@ struct PetScreen: View {
         .navigationTitle("\(pet?.avatar ?? "") \(pet?.name ?? "")")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .primaryAction) {
+            ToolbarItemGroup(placement: .primaryAction) {
+                Button {
+                    showIntake = true
+                } label: {
+                    Image(systemName: "fork.knife")
+                }
                 Button {
                     showCapture = true
                 } label: {
@@ -79,12 +97,35 @@ struct PetScreen: View {
         .sheet(isPresented: $showCapture) {
             CaptureSheet(petID: petID)
         }
+        .sheet(isPresented: $showRegimen) {
+            RegimenSheet(petID: petID)
+        }
+        .sheet(isPresented: $showIntake) {
+            IntakeSheet(petID: petID)
+        }
         .sheet(isPresented: $showSummary) {
             SummarySheet(petID: petID)
         }
         .sheet(isPresented: $showEdit) {
             if let pet = pet {
                 PetEditSheet(pet: pet)
+            }
+        }
+    }
+
+    // MARK: Regimen (today's checklist + what they're on)
+
+    @ViewBuilder
+    private var regimenSection: some View {
+        let regimen = store.regimen(for: petID)
+        if !regimen.isEmpty {
+            SectionHeader(title: "Today's meds")
+            DoseChecklist(petID: petID)
+            let asNeeded = regimen.filter { !$0.isScheduled }
+            if !asNeeded.isEmpty {
+                Text("As needed: " + asNeeded.map { $0.name + ($0.dose.isEmpty ? "" : " \($0.dose)") }.joined(separator: ", "))
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
         }
     }
@@ -130,11 +171,11 @@ struct PetScreen: View {
     private func episodeContext(episode: Episode) -> some View {
         let logged = store.interventions(in: episode)
 
-        if let medExposure = store.medExposureBefore(episode) {
-            let noteSuffix = medExposure.note.isEmpty ? "" : " (\(medExposure.note))"
-            let phrase = medExposure.kind == .medStarted ? "starting a med" : "a med change"
+        if let medStart = store.medStartBefore(episode) {
+            let noteSuffix = medStart.name.isEmpty ? "" : " (\(medStart.name))"
+            let phrase = medStart.isChange ? "a med change" : "starting a med"
             Label {
-                Text("This began \(hoursBetween(medExposure.date, episode.start))h after \(phrase)\(noteSuffix). That timing is common with med changes and worth mentioning to your vet.")
+                Text("This began \(hoursBetween(medStart.date, episode.start))h after \(phrase)\(noteSuffix). That timing is common with med changes and worth mentioning to your vet.")
                     .font(.subheadline)
             } icon: {
                 Image(systemName: "pills.fill")
@@ -248,6 +289,8 @@ struct PetScreen: View {
             .background(RoundedRectangle(cornerRadius: DS.rowRadius).fill(DS.surface))
         case .exposure(let exposure):
             ExposureRow(exposure: exposure)
+        case .intake(let intake):
+            IntakeRow(intake: intake)
         case .crossFeed(let feed):
             HStack(spacing: 10) {
                 Image(systemName: "fork.knife.circle.fill")
@@ -271,6 +314,7 @@ struct PetScreen: View {
         case .intervention(let intervention): store.removeIntervention(id: intervention.id)
         case .exposure(let exposure): store.removeExposure(id: exposure.id)
         case .crossFeed(let feed): store.removeCrossFeed(id: feed.id)
+        case .intake(let intake): store.removeIntake(id: intake.id)
         }
     }
 

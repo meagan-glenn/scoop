@@ -1,7 +1,9 @@
 import SwiftUI
 
-/// Log a cause-side input the moment it happens: a med change, a stressful
-/// event, an intake deviation. One tap each for what, who, and done.
+/// Log a cause-side input the moment it happens: a stressful event, an
+/// intake deviation. One tap each for what, who, and done. Named meds and
+/// food live in `IntakeSheet`; the med-change kinds stay in the enum for
+/// older records and the lookback's quick-add chips.
 struct ExposureSheet: View {
     @EnvironmentObject var store: AppStore
     @Environment(\.dismiss) private var dismiss
@@ -13,7 +15,6 @@ struct ExposureSheet: View {
     @State private var pickedTime: Date = Date()
     @State private var note = ""
 
-    private let medKinds: [ExposureKind] = [.medStarted, .medChanged]
     private let stressKinds: [ExposureKind] = [.travelBoarding, .houseGuests, .stressfulEvent]
     private let intakeKinds: [ExposureKind] = [.foundOutside, .tableFood, .newChew]
 
@@ -26,11 +27,10 @@ struct ExposureSheet: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    Text("Meds and stress change outputs too. Log it now, and the lookback remembers so you don't have to.")
+                    Text("Stress and surprises change outputs too. Log it now, and the lookback remembers so you don't have to.")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
 
-                    kindGroup(title: "Medication", kinds: medKinds)
                     kindGroup(title: "Stress & routine", kinds: stressKinds)
                     kindGroup(title: "Intake", kinds: intakeKinds)
 
@@ -84,7 +84,7 @@ struct ExposureSheet: View {
                 }
                 .padding()
             }
-            .navigationTitle("Meds & stress")
+            .navigationTitle("Stress & events")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {

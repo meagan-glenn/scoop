@@ -9,6 +9,7 @@ struct LookbackView: View {
 
     // Quick-add chips create real exposure events; toggling off removes them.
     @State private var addedExposures: [ExposureKind: UUID] = [:]
+    @State private var showIntake = false
 
     private let quickAdds: [ExposureKind] = [
         .foundOutside, .tableFood, .newChew, .medChanged, .travelBoarding, .stressfulEvent,
@@ -32,7 +33,7 @@ struct LookbackView: View {
                                 .foregroundColor(Tier.monitor.color)
                             VStack(alignment: .leading) {
                                 Text(item.name).font(.subheadline.weight(.semibold))
-                                Text("\(item.kind) · introduced \(relativeDay(item.firstIntroduced))")
+                                Text("\(item.kind.label) · introduced \(relativeDay(item.firstIntroduced))")
                                     .font(.caption)
                                     .foregroundColor(.secondary)
                             }
@@ -58,8 +59,36 @@ struct LookbackView: View {
                     }
                 }
 
+                if !lookback.intakes.isEmpty {
+                    SectionHeader(title: "Given in the window")
+                    ForEach(lookback.intakes) { intake in
+                        IntakeRow(intake: intake)
+                    }
+                }
+
+                if !lookback.missedDoses.isEmpty {
+                    SectionHeader(title: "Missed doses")
+                    ForEach(lookback.missedDoses) { missed in
+                        HStack(spacing: 10) {
+                            Image(systemName: "circle.slash")
+                                .foregroundColor(Tier.concern.color)
+                                .frame(width: 24)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("\(missed.item.name) · \(missed.slot.label.lowercased()) dose")
+                                    .font(.subheadline)
+                                Text("Nothing logged \(relativeDay(missed.due))")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            Spacer()
+                        }
+                        .padding(10)
+                        .background(RoundedRectangle(cornerRadius: DS.rowRadius).fill(DS.surface))
+                    }
+                }
+
                 if !lookback.exposures.isEmpty {
-                    SectionHeader(title: "Meds, stress & intake (last 7 days)")
+                    SectionHeader(title: "Stress & events (last 7 days)")
                     ForEach(lookback.exposures) { exposure in
                         ExposureRow(exposure: exposure)
                     }
@@ -73,6 +102,15 @@ struct LookbackView: View {
                 }
 
                 SectionHeader(title: "Anything we missed?")
+                Button {
+                    showIntake = true
+                } label: {
+                    Label("Something \(petName) ate or took", systemImage: "fork.knife")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
+                }
+                .buttonStyle(.bordered)
                 FlowLayout(spacing: 8) {
                     ForEach(quickAdds) { kind in
                         let existing = addedExposures[kind]
@@ -99,6 +137,9 @@ struct LookbackView: View {
                 .buttonStyle(.borderedProminent)
             }
             .padding()
+        }
+        .sheet(isPresented: $showIntake) {
+            IntakeSheet(petID: petID)
         }
     }
 }

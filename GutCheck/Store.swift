@@ -9,6 +9,7 @@ struct AppData: Codable, Equatable {
     var crossFeeds: [CrossFeed] = []
     var episodes: [Episode] = []
     var exposures: [ExposureEvent] = []
+    var intakes: [IntakeEvent] = []
     var hasOnboarded: Bool = false
     /// True while this device is exploring the bundled demo household. Demo
     /// data is a local sandbox: it never uploads to CloudKit and a real
@@ -27,6 +28,7 @@ struct AppData: Codable, Equatable {
         crossFeeds = try container.decodeIfPresent([CrossFeed].self, forKey: .crossFeeds) ?? []
         episodes = try container.decodeIfPresent([Episode].self, forKey: .episodes) ?? []
         exposures = try container.decodeIfPresent([ExposureEvent].self, forKey: .exposures) ?? []
+        intakes = try container.decodeIfPresent([IntakeEvent].self, forKey: .intakes) ?? []
         // Files written before onboarding existed already have a household.
         hasOnboarded = try container.decodeIfPresent(Bool.self, forKey: .hasOnboarded) ?? !pets.isEmpty
         isDemo = try container.decodeIfPresent(Bool.self, forKey: .isDemo) ?? false
@@ -143,10 +145,11 @@ final class AppStore: ObservableObject {
             cleaned.crossFeeds.removeAll { demoIDs.contains($0.eaterID) || demoIDs.contains($0.foodOwnerID) }
             cleaned.episodes.removeAll { demoIDs.contains($0.petID) }
             cleaned.exposures.removeAll { $0.petID.map(demoIDs.contains) ?? false }
+            cleaned.intakes.removeAll { demoIDs.contains($0.petID) }
             cleaned.items.removeAll { item in
                 switch item.scope {
                 case .pet(let owner): return demoIDs.contains(owner)
-                case .household: return Self.seedHouseholdItemSignatures.contains("\(item.name)|\(item.kind)")
+                case .household: return Self.seedHouseholdItemSignatures.contains("\(item.name)|\(item.kind.rawValue)")
                 }
             }
         }
@@ -196,10 +199,22 @@ final class AppStore: ObservableObject {
             data.crossFeeds.removeAll { feed in
                 feed.eaterID == petID && feed.amount == "half the bowl" && near(feed.date, ago(2))
             }
-            let seedItems: [(String, Double)] = [("Hill's i/d|food", 220), ("Puppy kibble|food", 90), ("Salmon kibble|food", 300)]
-            data.items.removeAll { item in
+            let seedItems: [(String, Double)] = [
+                ("Hill's i/d|food", 220), ("Puppy kibble|food", 90), ("Salmon kibble|food", 300),
+                ("Probiotic|supplement", 10),
+            ]
+            let removedItems = data.items.filter { item in
                 guard case .pet(let owner) = item.scope, owner == petID else { return false }
-                return seedItems.contains { $0.0 == "\(item.name)|\(item.kind)" && near(item.firstIntroduced, ago($0.1)) }
+                return seedItems.contains { $0.0 == "\(item.name)|\(item.kind.rawValue)" && near(item.firstIntroduced, ago($0.1)) }
+            }
+            let removedItemIDs = Set(removedItems.map(\.id))
+            data.items.removeAll { removedItemIDs.contains($0.id) }
+            // The seed banana is household-scoped, so it's matched by offset.
+            let banana = data.items.filter { $0.name == "Banana" && $0.kind == .treat && near($0.firstIntroduced, ago(2.4)) }
+            let bananaIDs = Set(banana.map(\.id))
+            data.items.removeAll { bananaIDs.contains($0.id) }
+            data.intakes.removeAll { intake in
+                intake.petID == petID && (removedItemIDs.contains(intake.itemID) || bananaIDs.contains(intake.itemID))
             }
         }
         data.interventions.removeAll { $0.episodeID.map(episodeIDs.contains) ?? false }
@@ -225,6 +240,113 @@ final class AppStore: ObservableObject {
     /// but leave every picker and list.
     var activePets: [Pet] {
         data.pets.filter { !$0.isArchived }
+    }
+
+    func item(_ id: UUID) -> Item? {
+        data.items.first { $0.id == id }
+    }
+
+    /// Everything this animal could be given: its own items plus household ones.
+    func items(for petID: UUID) -> [Item] {
+        data.items.filter { $0.applies(to: petID) }
+    }
+
+    /// Active meds and supplements for this animal, scheduled first.
+    func regimen(for petID: UUID) -> [Item] {
+        items(for: petID)
+            .filter { $0.kind.isRegimen && $0.isActive }
+            .sorted { a, b in
+                if a.isScheduled != b.isScheduled { return a.isScheduled }
+                return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+            }
+    }
+
+    /// Items due in a daily slot for this animal.
+    func scheduledItems(for petID: UUID, slot: DoseSlot? = nil) -> [Item] {
+        regimen(for: petID).filter { item in
+            item.isScheduled && (slot.map { item.schedule.contains($0) } ?? true)
+        }
+    }
+
+    /// Any animal in the house on a scheduled regimen — the reminder trigger.
+    var petsWithSchedules: [Pet] {
+        activePets.filter { !scheduledItems(for: $0.id).isEmpty }
+    }
+
+    func intakes(for petID: UUID, itemID: UUID? = nil) -> [IntakeEvent] {
+        data.intakes.filter { intake in intake.petID == petID && (itemID == nil || intake.itemID == itemID) }
+    }
+
+    func doseState(petID: UUID, item: Item, slot: DoseSlot, day: Date = Date(), now: Date = Date()) -> DoseState {
+        GutCheck.doseState(intakes: intakes(for: petID, itemID: item.id), slot: slot, day: day, now: now)
+    }
+
+    /// Items most recently given to this animal, for the "what?" chips.
+    func recentItems(for petID: UUID) -> [Item] {
+        let lastGiven = Dictionary(grouping: intakes(for: petID), by: \.itemID)
+            .mapValues { $0.map(\.date).max() ?? .distantPast }
+        return items(for: petID)
+            .filter { $0.isActive }
+            .sorted { a, b in
+                let da = lastGiven[a.id] ?? a.firstIntroduced
+                let db = lastGiven[b.id] ?? b.firstIntroduced
+                return da > db
+            }
+    }
+
+    struct MissedDose: Identifiable, Equatable {
+        var item: Item
+        var slot: DoseSlot
+        var day: Date
+        var id: String { "\(item.id)-\(slot.rawValue)-\(day.timeIntervalSince1970)" }
+        var due: Date { slot.dueDate(on: day) }
+    }
+
+    /// Scheduled doses with nothing logged, over whole days that have ended.
+    /// Today is never "missed" — it's still "due".
+    func missedDoses(for petID: UUID, from start: Date, to end: Date = Date()) -> [MissedDose] {
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: end)
+        var missed: [MissedDose] = []
+        var day = cal.startOfDay(for: start)
+        while day < today {
+            for item in items(for: petID) where item.kind.isRegimen && item.isDue(on: day) {
+                for slot in item.schedule {
+                    if doseState(petID: petID, item: item, slot: slot, day: day, now: end) == .missed {
+                        missed.append(MissedDose(item: item, slot: slot, day: day))
+                    }
+                }
+            }
+            guard let next = cal.date(byAdding: .day, value: 1, to: day) else { break }
+            day = next
+        }
+        return missed.sorted { $0.due > $1.due }
+    }
+
+    /// Adherence over a window: (given, scheduled). Skipped doses count as
+    /// neither given nor missed — they were a decision, not a lapse.
+    func adherence(for petID: UUID, item: Item, from start: Date, to end: Date = Date()) -> (given: Int, scheduled: Int) {
+        guard item.isScheduled || !item.schedule.isEmpty else { return (0, 0) }
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: end)
+        var given = 0
+        var scheduled = 0
+        var day = cal.startOfDay(for: max(start, item.trackedSince))
+        while day <= today {
+            if item.isDue(on: day) {
+                for slot in item.schedule {
+                    switch doseState(petID: petID, item: item, slot: slot, day: day, now: end) {
+                    case .given: given += 1; scheduled += 1
+                    case .missed: scheduled += 1
+                    case .due: scheduled += 1
+                    case .skipped, .upcoming: break
+                    }
+                }
+            }
+            guard let next = cal.date(byAdding: .day, value: 1, to: day) else { break }
+            day = next
+        }
+        return (given, scheduled)
     }
 
     func lastOutputDate(for petID: UUID) -> Date? {
@@ -335,6 +457,107 @@ final class AppStore: ObservableObject {
         data.exposures.removeAll { $0.id == id }
     }
 
+    // MARK: - Items & intake
+
+    @discardableResult
+    func addItem(_ item: Item) -> Item {
+        data.items.append(item)
+        return item
+    }
+
+    func updateItem(_ item: Item) {
+        if let index = data.items.firstIndex(where: { $0.id == item.id }) {
+            data.items[index] = item
+        }
+    }
+
+    /// End a course. The item and every dose stay in the record.
+    func stopItem(id: UUID, on date: Date = Date()) {
+        if let index = data.items.firstIndex(where: { $0.id == id }) {
+            data.items[index].stopped = date
+        }
+    }
+
+    func removeItem(id: UUID) {
+        data.items.removeAll { $0.id == id }
+        data.intakes.removeAll { $0.itemID == id }
+    }
+
+    @discardableResult
+    func logIntake(petID: UUID, itemID: UUID, date: Date = Date(), amount: String = "",
+                   slot: DoseSlot? = nil, status: IntakeStatus = .given, note: String = "") -> IntakeEvent {
+        let intake = IntakeEvent(petID: petID, itemID: itemID, date: date, amount: amount, slot: slot, status: status, note: note)
+        data.intakes.append(intake)
+        return intake
+    }
+
+    func removeIntake(id: UUID) {
+        data.intakes.removeAll { $0.id == id }
+    }
+
+    /// Checklist tap: log the slot as given (or skipped); tapping a logged
+    /// slot again clears it. One tap forward, one tap back.
+    func setDose(petID: UUID, item: Item, slot: DoseSlot, day: Date = Date(), status: IntakeStatus?) {
+        let state = doseState(petID: petID, item: item, slot: slot, day: day)
+        switch state {
+        case .given(let existing), .skipped(let existing):
+            removeIntake(id: existing.id)
+        default:
+            break
+        }
+        guard let status else { return }
+        // Stamp the real time when it's today, the due time when backfilling.
+        let isToday = Calendar.current.isDateInToday(day)
+        let stamp = isToday ? Date() : slot.dueDate(on: day)
+        logIntake(petID: petID, itemID: item.id, date: stamp, amount: item.dose, slot: slot, status: status)
+    }
+
+    /// "Morning meds: done." Marks every unlogged scheduled item in the slot
+    /// as given. Returns how many were logged.
+    @discardableResult
+    func giveSlot(petID: UUID, slot: DoseSlot, day: Date = Date()) -> Int {
+        var count = 0
+        for item in scheduledItems(for: petID, slot: slot) {
+            if !doseState(petID: petID, item: item, slot: slot, day: day).isLogged {
+                setDose(petID: petID, item: item, slot: slot, day: day, status: .given)
+                count += 1
+            }
+        }
+        return count
+    }
+
+    /// Undo a whole slot: clears every logged item in it for the day.
+    func clearSlot(petID: UUID, slot: DoseSlot, day: Date = Date()) {
+        for item in scheduledItems(for: petID, slot: slot) {
+            setDose(petID: petID, item: item, slot: slot, day: day, status: nil)
+        }
+    }
+
+    /// Slot summary for one animal on one day: how many of its scheduled
+    /// items are logged, and the worst state among the rest.
+    struct SlotSummary: Equatable {
+        var slot: DoseSlot
+        var total: Int
+        var given: Int
+        var skipped: Int
+        var pending: DoseState? // .due / .missed / .upcoming for the unlogged ones
+        var isComplete: Bool { given + skipped == total && total > 0 }
+    }
+
+    func slotSummary(petID: UUID, slot: DoseSlot, day: Date = Date()) -> SlotSummary? {
+        let items = scheduledItems(for: petID, slot: slot)
+        guard !items.isEmpty else { return nil }
+        var summary = SlotSummary(slot: slot, total: items.count, given: 0, skipped: 0, pending: nil)
+        for item in items {
+            switch doseState(petID: petID, item: item, slot: slot, day: day) {
+            case .given: summary.given += 1
+            case .skipped: summary.skipped += 1
+            case let state: summary.pending = state
+            }
+        }
+        return summary
+    }
+
     // MARK: - Corrections (the record can be wrong; make wrong fixable)
 
     func removeEvent(id: UUID) {
@@ -389,6 +612,28 @@ final class AppStore: ObservableObject {
         }
     }
 
+    struct MedStart: Equatable {
+        var name: String
+        var date: Date
+        var isChange: Bool
+    }
+
+    /// A med started (named item or legacy exposure) in the 72h before onset.
+    func medStartBefore(_ episode: Episode) -> MedStart? {
+        let window = 72 * 3600.0
+        if let item = items(for: episode.petID).first(where: { item in
+            item.kind == .med &&
+            episode.start.timeIntervalSince(item.firstIntroduced) >= 0 &&
+            episode.start.timeIntervalSince(item.firstIntroduced) <= window
+        }) {
+            return MedStart(name: item.name, date: item.firstIntroduced, isChange: false)
+        }
+        if let exposure = medExposureBefore(episode) {
+            return MedStart(name: exposure.note, date: exposure.date, isChange: exposure.kind == .medChanged)
+        }
+        return nil
+    }
+
     func updatePet(_ pet: Pet) {
         if let index = data.pets.firstIndex(where: { $0.id == pet.id }) {
             data.pets[index] = pet
@@ -410,6 +655,7 @@ final class AppStore: ObservableObject {
         case intervention(Intervention)
         case exposure(ExposureEvent)
         case crossFeed(CrossFeed)
+        case intake(IntakeEvent)
 
         var id: UUID {
             switch self {
@@ -417,6 +663,7 @@ final class AppStore: ObservableObject {
             case .intervention(let e): return e.id
             case .exposure(let e): return e.id
             case .crossFeed(let e): return e.id
+            case .intake(let e): return e.id
             }
         }
 
@@ -426,6 +673,7 @@ final class AppStore: ObservableObject {
             case .intervention(let e): return e.date
             case .exposure(let e): return e.date
             case .crossFeed(let e): return e.date
+            case .intake(let e): return e.date
             }
         }
     }
@@ -436,6 +684,7 @@ final class AppStore: ObservableObject {
         entries += data.interventions.filter { $0.petID == petID && $0.date >= since }.map { .intervention($0) }
         entries += data.exposures.filter { $0.applies(to: petID) && $0.date >= since }.map { .exposure($0) }
         entries += data.crossFeeds.filter { $0.eaterID == petID && $0.date >= since }.map { .crossFeed($0) }
+        entries += data.intakes.filter { $0.petID == petID && $0.date >= since }.map { .intake($0) }
         return entries.sorted { $0.date > $1.date }
     }
 
@@ -447,6 +696,8 @@ final class AppStore: ObservableObject {
         var interventions: [Intervention]
         var outputs: [OutputEvent]
         var exposures: [ExposureEvent]
+        var intakes: [IntakeEvent]
+        var missedDoses: [MissedDose]
     }
 
     func lookback(petID: UUID, hours: Double = 48) -> Lookback {
@@ -467,7 +718,12 @@ final class AppStore: ObservableObject {
         let exposed = data.exposures
             .filter { $0.applies(to: petID) && $0.date >= exposureCutoff }
             .sorted { $0.date > $1.date }
-        return Lookback(newItems: relevantItems, crossFeeds: feeds, interventions: meds, outputs: outs, exposures: exposed)
+        let given = data.intakes
+            .filter { $0.petID == petID && $0.date >= cutoff && $0.status == .given }
+            .sorted { $0.date > $1.date }
+        let missed = missedDoses(for: petID, from: cutoff)
+        return Lookback(newItems: relevantItems, crossFeeds: feeds, interventions: meds, outputs: outs,
+                        exposures: exposed, intakes: given, missedDoses: missed)
     }
 
     // MARK: - Seed data
@@ -490,12 +746,26 @@ final class AppStore: ObservableObject {
         seeded.pets = [navi, albus, arya]
 
         seeded.items = [
-            Item(name: "Hill's i/d", scope: .pet(navi.id), kind: "food", firstIntroduced: daysAgo(220)),
-            Item(name: "Puppy kibble", scope: .pet(albus.id), kind: "food", firstIntroduced: daysAgo(90)),
-            Item(name: "Salmon kibble", scope: .pet(arya.id), kind: "food", firstIntroduced: daysAgo(300)),
-            Item(name: "Bully sticks", scope: .household, kind: "chew", firstIntroduced: daysAgo(200)),
-            Item(name: "Yak cheese chew", scope: .household, kind: "chew", firstIntroduced: daysAgo(2.2)),
+            Item(name: "Hill's i/d", scope: .pet(navi.id), kind: .food, firstIntroduced: daysAgo(220)),
+            Item(name: "Puppy kibble", scope: .pet(albus.id), kind: .food, firstIntroduced: daysAgo(90)),
+            Item(name: "Salmon kibble", scope: .pet(arya.id), kind: .food, firstIntroduced: daysAgo(300)),
+            Item(name: "Bully sticks", scope: .household, kind: .chew, firstIntroduced: daysAgo(200)),
+            Item(name: "Yak cheese chew", scope: .household, kind: .chew, firstIntroduced: daysAgo(2.2)),
         ]
+
+        // Navi is on a morning probiotic. Ten days in, one morning missed.
+        let probiotic = Item(name: "Probiotic", scope: .pet(navi.id), kind: .supplement,
+                             firstIntroduced: daysAgo(10), dose: "1 capsule", schedule: [.morning])
+        seeded.items.append(probiotic)
+        for dayBack in stride(from: 9, through: 1, by: -1) where dayBack != 3 {
+            let morning = Calendar.current.date(bySettingHour: 7, minute: 20, second: 0, of: daysAgo(Double(dayBack))) ?? daysAgo(Double(dayBack))
+            seeded.intakes.append(IntakeEvent(petID: navi.id, itemID: probiotic.id, date: morning,
+                                              amount: "1 capsule", slot: .morning))
+        }
+        // …and a piece of banana ~34h before the episode opened.
+        let banana = Item(name: "Banana", scope: .household, kind: .treat, firstIntroduced: daysAgo(2.4))
+        seeded.items.append(banana)
+        seeded.intakes.append(IntakeEvent(petID: navi.id, itemID: banana.id, date: daysAgo(2.4), amount: "a few slices"))
 
         // A resolved past episode for Navi, with the interventions that were tried.
         let pastEpisode = Episode(petID: navi.id, start: daysAgo(61), end: daysAgo(57),

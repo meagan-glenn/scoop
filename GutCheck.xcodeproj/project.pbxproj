@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		06C431C40892AB6BFBFF4C19 /* PetScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65DF898CEFE63C8E710E458E /* PetScreen.swift */; };
 		0CEDD21181B0C61106BFF842 /* PetEditView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05B6887D59C555216027ACF4 /* PetEditView.swift */; };
+		0CFD085FF9F70298077C263C /* IntakeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D2BB00D04AE5E8489A50B0B /* IntakeView.swift */; };
 		2B19DED9E13DE7E07B8A275A /* SummaryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4310DA157945EED9A6B0CBD /* SummaryView.swift */; };
 		36E96144FD81C8209EDF60B1 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = DCCC25602868E44F8F095AAA /* PrivacyInfo.xcprivacy */; };
 		3CE4D6ABD5529ADF77C2E0E9 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = EB6EA9A8BC10FD3514AB54B2 /* Assets.xcassets */; };
@@ -21,6 +22,7 @@
 		BAF54BB715032E6ED3F71C58 /* AIScorer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 153513293E97E186E6D2F584 /* AIScorer.swift */; };
 		BB1B6F216899456A9E348335 /* Domain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64F3F7188AF5F7B5A1FB6C15 /* Domain.swift */; };
 		C8A0CD3B4D40037B6DBD89D2 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2918A3A27FA8F9D8F3095DB /* OnboardingView.swift */; };
+		CAA182F259D2EF72A79096B4 /* DoseReminders.swift in Sources */ = {isa = PBXBuildFile; fileRef = F36421F8C852832B9A41652C /* DoseReminders.swift */; };
 		CFB301FF88B80BD1A377AD0F /* SyncView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3E848D8F4B1838A8D9A1CC6 /* SyncView.swift */; };
 		DC0FFE8E19BAEEBE363DC400 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = E78199832FC64C3A70E1470A /* Theme.swift */; };
 		DD9BE109FAF5BE7CD2355ED6 /* CaptureView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A090BCE70EB346758E9D6F5 /* CaptureView.swift */; };
@@ -29,6 +31,7 @@
 
 /* Begin PBXFileReference section */
 		05B6887D59C555216027ACF4 /* PetEditView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PetEditView.swift; sourceTree = "<group>"; };
+		0D2BB00D04AE5E8489A50B0B /* IntakeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntakeView.swift; sourceTree = "<group>"; };
 		14B16B7E22D869F11E21A3F7 /* ExposureView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExposureView.swift; sourceTree = "<group>"; };
 		153513293E97E186E6D2F584 /* AIScorer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIScorer.swift; sourceTree = "<group>"; };
 		24EE06A27176DE73DCD95CE6 /* Store.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Store.swift; sourceTree = "<group>"; };
@@ -49,6 +52,7 @@
 		DCCC25602868E44F8F095AAA /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		E78199832FC64C3A70E1470A /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
 		EB6EA9A8BC10FD3514AB54B2 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		F36421F8C852832B9A41652C /* DoseReminders.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DoseReminders.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -69,11 +73,13 @@
 				3A090BCE70EB346758E9D6F5 /* CaptureView.swift */,
 				842667E423BB5EE12AC0DA99 /* CloudSync.swift */,
 				64F3F7188AF5F7B5A1FB6C15 /* Domain.swift */,
+				F36421F8C852832B9A41652C /* DoseReminders.swift */,
 				14B16B7E22D869F11E21A3F7 /* ExposureView.swift */,
 				5558F0CCCAD205FA530CF3AF /* GutCheck.entitlements */,
 				547A9BD361A6B6D696EF818E /* HistoryView.swift */,
 				C8C43088D0E1D620D7BB33DD /* HomeView.swift */,
 				A1E6FB9D4EF5C514C3DE92C6 /* Info.plist */,
+				0D2BB00D04AE5E8489A50B0B /* IntakeView.swift */,
 				6041A40F4EAAC165B68C14C6 /* LookbackView.swift */,
 				A2918A3A27FA8F9D8F3095DB /* OnboardingView.swift */,
 				05B6887D59C555216027ACF4 /* PetEditView.swift */,
@@ -195,9 +201,11 @@
 				DD9BE109FAF5BE7CD2355ED6 /* CaptureView.swift in Sources */,
 				4BDB42498BCD17E81ABB97F2 /* CloudSync.swift in Sources */,
 				BB1B6F216899456A9E348335 /* Domain.swift in Sources */,
+				CAA182F259D2EF72A79096B4 /* DoseReminders.swift in Sources */,
 				654C9362AB39E028E1035DAC /* ExposureView.swift in Sources */,
 				B9256EF7178987D36E7FFC6C /* HistoryView.swift in Sources */,
 				46ED080FDA326931A99A049D /* HomeView.swift in Sources */,
+				0CFD085FF9F70298077C263C /* IntakeView.swift in Sources */,
 				ABB28192275EE73CC1F538C8 /* LookbackView.swift in Sources */,
 				C8A0CD3B4D40037B6DBD89D2 /* OnboardingView.swift in Sources */,
 				0CEDD21181B0C61106BFF842 /* PetEditView.swift in Sources */,
@@ -219,7 +227,7 @@
 				CODE_SIGN_ENTITLEMENTS = GutCheck/GutCheck.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 10;
+				CURRENT_PROJECT_VERSION = 11;
 				DEVELOPMENT_TEAM = MRV697X79G;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = GutCheck/Info.plist;
@@ -365,7 +373,7 @@
 				CODE_SIGN_ENTITLEMENTS = GutCheck/GutCheck.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 10;
+				CURRENT_PROJECT_VERSION = 11;
 				DEVELOPMENT_TEAM = MRV697X79G;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = GutCheck/Info.plist;

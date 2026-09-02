@@ -6,6 +6,7 @@ struct HomeView: View {
     @State private var showCapture = false
     @State private var showCrossFeed = false
     @State private var showExposure = false
+    @State private var showIntake = false
     @State private var showAddPet = false
     @State private var showArchived = false
     @State private var showSync = false
@@ -31,12 +32,18 @@ struct HomeView: View {
                     SectionHeader(title: "The household")
 
                     ForEach(store.activePets) { pet in
-                        NavigationLink {
-                            PetScreen(petID: pet.id)
-                        } label: {
-                            PetCard(pet: pet)
+                        VStack(spacing: 8) {
+                            NavigationLink {
+                                PetScreen(petID: pet.id)
+                            } label: {
+                                PetCard(pet: pet)
+                            }
+                            .buttonStyle(.plain)
+                            // Today's doses, one tap per slot. Lives outside
+                            // the link so a tap on it never navigates.
+                            DoseStrip(petID: pet.id)
+                                .padding(.horizontal, 4)
                         }
-                        .buttonStyle(.plain)
                     }
 
                     Button {
@@ -85,13 +92,14 @@ struct HomeView: View {
                     SectionHeader(title: "Quick log")
                         .padding(.top, 4)
 
-                    HStack(spacing: 10) {
+                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
                         quickAction("Log a poop", symbol: "camera.fill") { showCapture = true }
+                        quickAction("Food & meds", symbol: "pills.circle") { showIntake = true }
                         // Food theft needs someone to steal from.
                         if store.activePets.count >= 2 {
                             quickAction("Food theft", symbol: "fork.knife.circle") { showCrossFeed = true }
                         }
-                        quickAction("Meds & stress", symbol: "pills.circle") { showExposure = true }
+                        quickAction("Stress & events", symbol: "cloud.bolt.circle") { showExposure = true }
                     }
                 }
                 .padding()
@@ -124,6 +132,9 @@ struct HomeView: View {
             }
             .sheet(isPresented: $showExposure) {
                 ExposureSheet()
+            }
+            .sheet(isPresented: $showIntake) {
+                IntakeSheet(petID: store.activePets.count == 1 ? defaultCapturePet : nil)
             }
             .sheet(isPresented: $showAddPet) {
                 AddPetSheet()

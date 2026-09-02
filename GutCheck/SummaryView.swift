@@ -28,6 +28,14 @@ struct SummarySheet: View {
                         }
                     }
 
+                    let meds = medBlocks
+                    if !meds.isEmpty {
+                        SectionHeader(title: "Meds & supplements")
+                        ForEach(meds) { block in
+                            MedBlockView(block: block)
+                        }
+                    }
+
                     let triggers = suspectedTriggers
                     if !triggers.isEmpty {
                         SectionHeader(title: "Preceded episodes by ≤72h")
@@ -148,12 +156,108 @@ struct SummarySheet: View {
         outputsInWindow.filter { $0.tier >= .concern }.sorted { $0.date > $1.date }
     }
 
+    /// One med or supplement, as the vet wants it: what, since when, how
+    /// reliably it went in, and what the stools did before versus since.
+    /// Every number is arithmetic over logged events.
+    struct MedBlock: Identifiable {
+        var item: Item
+        var statusLine: String
+        var adherenceLine: String?
+        var beforeLine: String?
+        var sinceLine: String?
+        var id: UUID { item.id }
+    }
+
+    private var medBlocks: [MedBlock] {
+        let items = store.items(for: petID).filter { item in
+            item.kind.isRegimen && (item.isActive || (item.stopped ?? .distantPast) >= windowStart)
+        }
+        return items
+            .sorted { a, b in
+                if a.isActive != b.isActive { return a.isActive }
+                return a.firstIntroduced > b.firstIntroduced
+            }
+            .map { item in
+                let when = item.schedule.isEmpty ? "as needed" : item.schedule.map { $0.label.lowercased() }.joined(separator: " & ")
+                var status = "\(item.dose.isEmpty ? "" : item.dose + " · ")\(when) · started \(shortDate(item.firstIntroduced))"
+                if let stopped = item.stopped { status += " · stopped \(shortDate(stopped))" }
+
+                var adherence: String?
+                if !item.schedule.isEmpty {
+                    let counts = store.adherence(for: petID, item: item, from: windowStart)
+                    if counts.scheduled > 0 {
+                        adherence = "Given \(counts.given) of \(counts.scheduled) scheduled doses"
+                        if item.trackedSince > windowStart {
+                            adherence! += " since \(shortDate(item.trackedSince))"
+                        }
+                    }
+                } else {
+                    let given = store.intakes(for: petID, itemID: item.id)
+                        .filter { $0.status == .given && $0.date >= windowStart }.count
+                    adherence = given == 0 ? nil : "Given \(given) time\(given == 1 ? "" : "s") in the window"
+                }
+
+                // Stools before the start vs. while on it. Only shown when
+                // both sides have logs — one side alone is not a comparison.
+                let courseEnd = item.stopped ?? Date()
+                let before = store.data.events.filter { $0.petID == petID && $0.date >= windowStart && $0.date < item.firstIntroduced }
+                let since = store.data.events.filter { $0.petID == petID && $0.date >= item.firstIntroduced && $0.date <= courseEnd }
+                var beforeLine: String?
+                var sinceLine: String?
+                if !before.isEmpty, !since.isEmpty {
+                    beforeLine = "Before: " + Self.tierSummary(before)
+                    sinceLine = (item.isActive ? "Since: " : "While on it: ") + Self.tierSummary(since)
+                }
+                return MedBlock(item: item, statusLine: status, adherenceLine: adherence, beforeLine: beforeLine, sinceLine: sinceLine)
+            }
+    }
+
+    /// "6 of 8 normal · 2 concern" — counts by tier, worst first.
+    private static func tierSummary(_ events: [OutputEvent]) -> String {
+        let normals = events.filter { $0.tier == .normal }.count
+        var parts = ["\(normals) of \(events.count) normal"]
+        for tier in Tier.allCases.reversed() where tier != .normal {
+            let count = events.filter { $0.tier == tier }.count
+            if count > 0 { parts.append("\(count) \(tier.label.lowercased())") }
+        }
+        return parts.joined(separator: " · ")
+    }
+
     /// Anything logged within 72h before an episode opened — exposures,
-    /// cross-feeding, new household items. Association only.
+    /// cross-feeding, named intake, missed doses, new household items.
+    /// Association only, with the counter-evidence alongside: how often the
+    /// same thing went in without an episode following.
     private var suspectedTriggers: [String] {
         var lines: [String] = []
-        for episode in episodesInWindow {
+        let episodes = episodesInWindow
+        for episode in episodes {
             let preWindow = episode.start.addingTimeInterval(-72 * 3600)
+            // Named intake: treats, food, chews, and extra (unscheduled) doses.
+            // Routine scheduled doses aren't triggers; a *start* is.
+            let intakesBefore = store.intakes(for: petID).filter {
+                $0.status == .given && $0.slot == nil && $0.date >= preWindow && $0.date <= episode.start
+            }
+            for intake in intakesBefore {
+                guard let item = store.item(intake.itemID) else { continue }
+                var line = "\(item.name) (\(item.kind.label.lowercased())), \(hoursBetween(intake.date, episode.start))h before onset"
+                let allGiven = store.intakes(for: petID, itemID: item.id).filter { $0.status == .given && $0.date >= windowStart }
+                if allGiven.count > 1 {
+                    let preceding = allGiven.filter { given in
+                        episodes.contains { ep in
+                            given.date >= ep.start.addingTimeInterval(-72 * 3600) && given.date <= ep.start
+                        }
+                    }.count
+                    line += " · given \(allGiven.count)× in \(windowDays) days, \(preceding) of those before an episode"
+                }
+                lines.append(line)
+            }
+            for item in store.items(for: petID)
+            where item.kind.isRegimen && item.firstIntroduced >= preWindow && item.firstIntroduced <= episode.start {
+                lines.append("Started \(item.name), \(hoursBetween(item.firstIntroduced, episode.start))h before onset")
+            }
+            for missed in store.missedDoses(for: petID, from: preWindow, to: episode.start) {
+                lines.append("Missed \(missed.item.name) (\(missed.slot.label.lowercased())), \(hoursBetween(missed.due, episode.start))h before onset")
+            }
             for exposure in store.data.exposures
             where exposure.applies(to: petID) && exposure.date >= preWindow && exposure.date <= episode.start {
                 let note = exposure.note.isEmpty ? "" : " (\(exposure.note))"
@@ -164,7 +268,9 @@ struct SummarySheet: View {
                 lines.append("Ate \(store.pet(feed.foodOwnerID)?.name ?? "another pet")'s food, \(hoursBetween(feed.date, episode.start))h before onset")
             }
             for item in store.data.items
-            where item.firstIntroduced >= preWindow && item.firstIntroduced <= episode.start {
+            where !item.kind.isRegimen && item.applies(to: petID)
+                && item.firstIntroduced >= preWindow && item.firstIntroduced <= episode.start
+                && !intakesBefore.contains(where: { $0.itemID == item.id }) {
                 lines.append("New item in the house: \(item.name)")
             }
         }
@@ -174,10 +280,21 @@ struct SummarySheet: View {
     private var vetQuestions: [String] {
         var questions: [String] = []
         for episode in episodesInWindow {
-            if let med = store.medExposureBefore(episode) {
-                let name = med.note.isEmpty ? "a recent med change" : med.note
+            if let med = store.medStartBefore(episode) {
+                let name = med.name.isEmpty ? "a recent med change" : med.name
                 questions.append("Symptoms began ~\(hoursBetween(med.date, episode.start))h after \(name). Could they be related?")
             }
+        }
+        for block in medBlocks where block.item.isActive {
+            if let since = block.sinceLine, let before = block.beforeLine {
+                questions.append("\(block.item.name): \(before.lowercased()); \(since.lowercased()). Keep going, adjust, or stop?")
+            } else if block.item.kind == .med {
+                questions.append("\(block.item.name): still the right call, and for how long?")
+            }
+        }
+        let missedTotal = store.missedDoses(for: petID, from: windowStart).count
+        if missedTotal >= 3 {
+            questions.append("\(missedTotal) scheduled doses were missed this month. Does that change the read on whether it's working?")
         }
         if !suspectedTriggers.isEmpty {
             questions.append("Do any of the items or events preceding episodes warrant an elimination trial?")
@@ -211,6 +328,15 @@ struct SummarySheet: View {
                 lines.append("  Tried: \(tried.map { $0.kind.label.lowercased() }.joined(separator: ", "))")
             }
         }
+        if !medBlocks.isEmpty {
+            lines.append("")
+            lines.append("Meds & supplements:")
+            for block in medBlocks {
+                lines.append("• \(block.item.name) — \(block.statusLine)")
+                if let adherence = block.adherenceLine { lines.append("  \(adherence)") }
+                if let before = block.beforeLine, let since = block.sinceLine { lines.append("  \(before) · \(since)") }
+            }
+        }
         if !suspectedTriggers.isEmpty {
             lines.append("")
             lines.append("Preceded episodes by ≤72h:")
@@ -229,5 +355,43 @@ struct SummarySheet: View {
         lines.append("")
         lines.append("Owner-logged observations via Scoop. Not a diagnosis.")
         return lines.joined(separator: "\n")
+    }
+}
+
+/// One med as a card: name and dose up top, the facts underneath.
+struct MedBlockView: View {
+    let block: SummarySheet.MedBlock
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Image(systemName: block.item.kind.symbol)
+                    .foregroundColor(block.item.isActive ? block.item.kind.tint : .secondary)
+                Text(block.item.name)
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                if !block.item.isActive {
+                    Text("Stopped")
+                        .font(.caption2.weight(.bold))
+                        .foregroundColor(.secondary)
+                }
+            }
+            Text(block.statusLine)
+                .font(.caption)
+                .foregroundColor(.secondary)
+            if let adherence = block.adherenceLine {
+                Text(adherence)
+                    .font(.caption)
+            }
+            if let before = block.beforeLine, let since = block.sinceLine {
+                Text(before)
+                    .font(.caption)
+                Text(since)
+                    .font(.caption)
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: DS.rowRadius).fill(DS.surface))
     }
 }
