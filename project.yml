@@ -42,6 +42,9 @@ targets:
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
+        # Xcode 15+ sandboxes script phases by default; the optional Secrets.plist
+        # copy below reads from the source tree and needs the sandbox off.
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
         PRODUCT_BUNDLE_IDENTIFIER: com.meagan.scoop
         # Meagan's individual Apple Developer team. Automatic signing registers
         # the App ID, CloudKit container, and profiles on first device build.
