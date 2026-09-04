@@ -178,7 +178,10 @@ struct SummarySheet: View {
                 return a.firstIntroduced > b.firstIntroduced
             }
             .map { item in
-                let when = item.cadenceLabel.lowercased()
+                var when = item.cadenceLabel.lowercased()
+                if let course = item.courseLabel, let end = item.plannedEnd() {
+                    when += " \(course), through \(shortDate(end))"
+                }
                 var status = "\(item.dose.isEmpty ? "" : item.dose + " · ")\(when) · started \(shortDate(item.firstIntroduced))"
                 if let stopped = item.stopped { status += " · stopped \(shortDate(stopped))" }
 
@@ -192,14 +195,20 @@ struct SummarySheet: View {
                     } else {
                         parts.append("No dose logged yet")
                     }
-                    if item.isActive {
+                    if state.isCourseComplete {
+                        parts.append("course complete")
+                    } else if item.isActive {
                         parts.append(state.isOverdue
                                      ? "next was due \(shortDate(state.nextDue)) (\(state.dueLabel.lowercased()))"
                                      : "next due \(shortDate(state.nextDue))")
                     }
-                    let given = store.intakes(for: petID, itemID: item.id)
-                        .filter { $0.status == .given && $0.date >= windowStart }.count
-                    if given > 0 { parts.append("\(given) dose\(given == 1 ? "" : "s") in the window") }
+                    if let planned = state.plannedDoses {
+                        parts.append("\(state.dosesGiven) of \(planned) planned doses given")
+                    } else {
+                        let given = store.intakes(for: petID, itemID: item.id)
+                            .filter { $0.status == .given && $0.date >= windowStart }.count
+                        if given > 0 { parts.append("\(given) dose\(given == 1 ? "" : "s") in the window") }
+                    }
                     adherence = parts.joined(separator: " · ")
                 } else if !item.schedule.isEmpty {
                     let counts = store.adherence(for: petID, item: item, from: windowStart)

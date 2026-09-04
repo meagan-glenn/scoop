@@ -622,6 +622,9 @@ struct Item: Identifiable, Codable, Equatable {
     /// Long-term cadence (monthly heartworm, a monthly injection). Mutually
     /// exclusive with `schedule`: a med is daily or it recurs, not both.
     var interval: DoseInterval?
+    /// A course with a planned end — "weekly for 6 weeks", "twice a day for
+    /// 10 days" — measured from `firstIntroduced`. Nil = ongoing.
+    var courseLength: DoseInterval?
     /// Adherence is only counted from here: backdating "started two weeks
     /// ago" must not invent two weeks of missed doses.
     var trackedSince: Date
@@ -630,7 +633,7 @@ struct Item: Identifiable, Codable, Equatable {
 
     init(id: UUID = UUID(), name: String, scope: ItemScope, kind: ItemKind, firstIntroduced: Date,
          dose: String = "", schedule: [DoseSlot] = [], interval: DoseInterval? = nil,
-         trackedSince: Date? = nil, stopped: Date? = nil) {
+         courseLength: DoseInterval? = nil, trackedSince: Date? = nil, stopped: Date? = nil) {
         self.id = id
         self.name = name
         self.scope = scope
@@ -639,6 +642,7 @@ struct Item: Identifiable, Codable, Equatable {
         self.dose = dose
         self.schedule = interval == nil ? schedule : []
         self.interval = interval
+        self.courseLength = courseLength
         self.trackedSince = trackedSince ?? firstIntroduced
         self.stopped = stopped
     }
@@ -656,15 +660,59 @@ struct Item: Identifiable, Codable, Equatable {
         dose = try container.decodeIfPresent(String.self, forKey: .dose) ?? ""
         schedule = try container.decodeIfPresent([DoseSlot].self, forKey: .schedule) ?? []
         interval = try container.decodeIfPresent(DoseInterval.self, forKey: .interval)
+        courseLength = try container.decodeIfPresent(DoseInterval.self, forKey: .courseLength)
         trackedSince = try container.decodeIfPresent(Date.self, forKey: .trackedSince) ?? firstIntroduced
         stopped = try container.decodeIfPresent(Date.self, forKey: .stopped)
     }
 
     var isActive: Bool { stopped == nil }
-    /// On a daily slot schedule (checklist, 7am/7pm reminders).
-    var isScheduled: Bool { isActive && !schedule.isEmpty }
+    /// On a daily slot schedule (checklist, 7am/7pm reminders). A course
+    /// that has run its planned length drops off the checklist by itself.
+    var isScheduled: Bool { isActive && !schedule.isEmpty && !courseEnded }
     /// On a long-term cadence (next dose derived from the last).
     var isRecurring: Bool { isActive && interval != nil }
+
+    /// Last day of a fixed-length course, or nil when ongoing. "For 6 weeks"
+    /// from a Monday ends the Sunday six weeks on, so a weekly dose lands
+    /// six times, not seven.
+    func plannedEnd(calendar: Calendar = .current) -> Date? {
+        courseLength.map { Self.courseEnd(start: firstIntroduced, length: $0, calendar: calendar) }
+    }
+
+    /// Last day of a course of `length` starting on `start`.
+    static func courseEnd(start: Date, length: DoseInterval, calendar: Calendar = .current) -> Date {
+        let day = calendar.startOfDay(for: start)
+        let end = length.next(after: day, calendar: calendar)
+        return calendar.date(byAdding: .day, value: -1, to: end) ?? end
+    }
+
+    /// The planned course is over (today is past its last day).
+    var courseEnded: Bool {
+        hasCourseEnded(on: Date())
+    }
+
+    func hasCourseEnded(on date: Date, calendar: Calendar = .current) -> Bool {
+        guard let end = plannedEnd(calendar: calendar) else { return false }
+        return calendar.startOfDay(for: date) > end
+    }
+
+    /// How many recurring doses the course calls for: every due date from the
+    /// start through the planned end. Nil when ongoing or not recurring.
+    func plannedDoseCount(calendar: Calendar = .current) -> Int? {
+        guard let interval, let end = plannedEnd(calendar: calendar) else { return nil }
+        var count = 0
+        var due = calendar.startOfDay(for: firstIntroduced)
+        while due <= end, count < 1000 {
+            count += 1
+            due = interval.next(after: due, calendar: calendar)
+        }
+        return count
+    }
+
+    /// "for 6 weeks" — nil when ongoing.
+    var courseLabel: String? {
+        courseLength.map { "for \($0.count) \($0.unit.label($0.count))" }
+    }
 
     /// "Morning & Evening" / "Every month" / "As needed".
     var cadenceLabel: String {
@@ -687,6 +735,7 @@ struct Item: Identifiable, Codable, Equatable {
         let dayEnd = dayStart.addingTimeInterval(24 * 3600)
         guard trackedSince < dayEnd else { return false }
         if let stopped, stopped < dayStart { return false }
+        if let end = plannedEnd(calendar: calendar), dayStart > end { return false }
         return true
     }
 }
@@ -784,13 +833,36 @@ struct IntervalDoseState: Equatable {
     var daysUntilDue: Int
     /// A dose logged today. Lets the home screen undo a mis-tap in place.
     var givenToday: IntakeEvent?
+    /// Doses given so far, all time — "dose 3 of 6".
+    var dosesGiven: Int
+    /// Doses the course calls for; nil when ongoing.
+    var plannedDoses: Int?
+    /// The course has run past its last day, logged or not.
+    var courseEnded: Bool
 
-    var isDue: Bool { daysUntilDue <= 0 }
-    var isOverdue: Bool { daysUntilDue < 0 }
+    /// Every planned dose is in, or the course's time is up. Nothing more
+    /// is due; the item is waiting to be marked stopped.
+    var isCourseComplete: Bool {
+        if courseEnded { return true }
+        if let plannedDoses { return dosesGiven >= plannedDoses }
+        return false
+    }
+
+    var isDue: Bool { daysUntilDue <= 0 && !isCourseComplete }
+    var isOverdue: Bool { daysUntilDue < 0 && !isCourseComplete }
     var isLogged: Bool { givenToday != nil }
 
-    /// "Due today" / "Due in 12 days" / "3 days overdue".
+    /// "dose 3 of 6" for the one coming up (or given today); "6 of 6 given"
+    /// once the course is done. Nil when ongoing.
+    var progressLabel: String? {
+        guard let plannedDoses else { return nil }
+        if isCourseComplete { return "\(dosesGiven) of \(plannedDoses) given" }
+        return "dose \(min(dosesGiven + (isLogged ? 0 : 1), plannedDoses)) of \(plannedDoses)"
+    }
+
+    /// "Due today" / "Due in 12 days" / "3 days overdue" / "Course complete".
     var dueLabel: String {
+        if isCourseComplete { return "Course complete" }
         if daysUntilDue == 0 { return "Due today" }
         if daysUntilDue == 1 { return "Due tomorrow" }
         if daysUntilDue > 0 { return "Due in \(daysUntilDue) days" }
@@ -817,7 +889,10 @@ func intervalDoseState(item: Item, intakes: [IntakeEvent], now: Date = Date(),
     let today = calendar.startOfDay(for: now)
     let days = calendar.dateComponents([.day], from: today, to: dueDay).day ?? 0
     let givenToday = logged.first { $0.status == .given && calendar.isDate($0.date, inSameDayAs: now) }
-    return IntervalDoseState(last: last, nextDue: dueDay, daysUntilDue: days, givenToday: givenToday)
+    let given = logged.filter { $0.status == .given }.count
+    return IntervalDoseState(last: last, nextDue: dueDay, daysUntilDue: days, givenToday: givenToday,
+                             dosesGiven: given, plannedDoses: item.plannedDoseCount(calendar: calendar),
+                             courseEnded: item.hasCourseEnded(on: now, calendar: calendar))
 }
 
 struct OutputEvent: Identifiable, Codable, Equatable {

@@ -307,6 +307,16 @@ final class AppStore: ObservableObject {
         intervalDues(for: petID, now: now).filter { $0.state.isDue && !$0.state.isLogged }
     }
 
+    /// Fixed-length courses that have run their length or had every planned
+    /// dose, still marked active — waiting for "done with it".
+    func finishedCourses(for petID: UUID, now: Date = Date()) -> [Item] {
+        regimen(for: petID).filter { item in
+            guard item.courseLength != nil else { return false }
+            if let state = intervalState(petID: petID, item: item, now: now) { return state.isCourseComplete }
+            return item.hasCourseEnded(on: now)
+        }
+    }
+
     /// "Gave the monthly one." Logs the dose; tapping the same day's dose
     /// again (status nil) removes it, so a mis-tap is one tap back.
     func setIntervalDose(petID: UUID, item: Item, date: Date = Date(), status: IntakeStatus?) {
@@ -829,6 +839,14 @@ final class AppStore: ObservableObject {
         seeded.items.append(heartworm)
         for dayBack in [200.0, 170, 140, 110, 80, 50, 34] {
             seeded.intakes.append(IntakeEvent(petID: albus.id, itemID: heartworm.id, date: daysAgo(dayBack), amount: "1 chew"))
+        }
+        // …and a weekly course with an end: six shots, three in so far.
+        let course = Item(name: "Allergy shot", scope: .pet(albus.id), kind: .med,
+                          firstIntroduced: daysAgo(15), dose: "0.5ml", interval: .weekly,
+                          courseLength: DoseInterval(count: 6, unit: .week))
+        seeded.items.append(course)
+        for dayBack in [15.0, 8, 1] {
+            seeded.intakes.append(IntakeEvent(petID: albus.id, itemID: course.id, date: daysAgo(dayBack), amount: "0.5ml"))
         }
 
         // …and a piece of banana ~34h before the episode opened.

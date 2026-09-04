@@ -76,7 +76,7 @@ final class DoseReminders: NSObject, ObservableObject {
                 }
                 if item.isRecurring,
                    let state = intervalDoseState(item: item, intakes: data.intakes.filter { $0.petID == pet.id }) {
-                    signature.insert("\(pet.id.uuidString)|\(item.id.uuidString)|\(state.nextDue.timeIntervalSince1970)")
+                    signature.insert("\(pet.id.uuidString)|\(item.id.uuidString)|\(state.nextDue.timeIntervalSince1970)|\(state.isCourseComplete)")
                 }
             }
         }
@@ -131,7 +131,7 @@ final class DoseReminders: NSObject, ObservableObject {
             try? await center.add(request)
         }
         for pet in store.activePets {
-            for due in store.intervalDues(for: pet.id) {
+            for due in store.intervalDues(for: pet.id) where !due.state.isCourseComplete {
                 try? await center.add(intervalRequest(pet: pet, due: due))
             }
         }

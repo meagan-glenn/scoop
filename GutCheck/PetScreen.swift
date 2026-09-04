@@ -122,7 +122,12 @@ struct PetScreen: View {
             SectionHeader(title: regimen.contains(where: \.isScheduled) ? "Today's meds" : "Meds")
             DoseChecklist(petID: petID)
             IntervalChecklist(petID: petID)
-            let asNeeded = regimen.filter { !$0.isScheduled && !$0.isRecurring }
+            // Daily courses that ran their length; recurring ones wrap up
+            // inside the long-term block.
+            ForEach(store.finishedCourses(for: petID).filter { $0.interval == nil }) { item in
+                FinishedCourseRow(item: item)
+            }
+            let asNeeded = regimen.filter { !$0.isScheduled && !$0.isRecurring && !$0.courseEnded }
             if !asNeeded.isEmpty {
                 Text("As needed: " + asNeeded.map { $0.name + ($0.dose.isEmpty ? "" : " \($0.dose)") }.joined(separator: ", "))
                     .font(.caption)

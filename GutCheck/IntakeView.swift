@@ -20,6 +20,7 @@ struct IntakeSheet: View {
     @State private var newDose = ""
     @State private var newSchedule: Set<DoseSlot> = []
     @State private var newInterval: DoseInterval?
+    @State private var newCourse: DoseInterval?
     @State private var amount = ""
     @State private var slot: DoseSlot?
     @State private var timing: LogTiming = .justNow
@@ -154,7 +155,8 @@ struct IntakeSheet: View {
             }
         }
         if creatingNew {
-            NewItemFields(name: $newName, kind: $newKind, dose: $newDose, schedule: $newSchedule, interval: $newInterval)
+            NewItemFields(name: $newName, kind: $newKind, dose: $newDose, schedule: $newSchedule,
+                          interval: $newInterval, courseLength: $newCourse)
                 .onChange(of: newDose) { _, value in
                     if amount.isEmpty || amount == newDose { amount = value }
                 }
@@ -195,6 +197,7 @@ struct IntakeSheet: View {
                             dose: newDose.trimmingCharacters(in: .whitespaces),
                             schedule: schedule,
                             interval: interval,
+                            courseLength: (schedule.isEmpty && interval == nil) ? nil : newCourse,
                             trackedSince: Date())
             store.addItem(item)
             itemID = item.id
@@ -248,6 +251,8 @@ struct NewItemFields: View {
     @Binding var dose: String
     @Binding var schedule: Set<DoseSlot>
     @Binding var interval: DoseInterval?
+    /// "For 6 weeks" — a course with an end. Nil = ongoing.
+    @Binding var courseLength: DoseInterval?
 
     /// Which cadence family is picked. Daily and interval are exclusive.
     private enum Cadence: Equatable {
@@ -345,6 +350,41 @@ struct NewItemFields: View {
                         .font(.caption2)
                         .foregroundColor(.secondary)
                 }
+                if cadence != .asNeeded {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("How long?")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        HStack(spacing: 8) {
+                            Chip(label: "Ongoing", isSelected: courseLength == nil, tint: .accentColor) {
+                                courseLength = nil
+                            }
+                            Chip(label: "A set course", isSelected: courseLength != nil, tint: .accentColor) {
+                                if courseLength == nil { courseLength = defaultCourse }
+                            }
+                        }
+                        if let course = courseLength {
+                            HStack(spacing: 10) {
+                                Stepper(value: Binding(
+                                    get: { course.count },
+                                    set: { courseLength = DoseInterval(count: $0, unit: course.unit) }
+                                ), in: 1...52) {
+                                    Text("For \(course.count)")
+                                        .font(.subheadline)
+                                }
+                                .fixedSize()
+                                ForEach(DoseInterval.Unit.allCases) { unit in
+                                    Chip(label: unit.label(course.count), isSelected: course.unit == unit, tint: .accentColor) {
+                                        courseLength = DoseInterval(count: course.count, unit: unit)
+                                    }
+                                }
+                            }
+                            Text("It drops off the checklist when the course is done, and you'll be asked to mark it stopped.")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
             }
         }
         .padding(12)
@@ -352,6 +392,18 @@ struct NewItemFields: View {
         .onAppear {
             if let interval, !DoseInterval.presets.contains(interval) { customInterval = true }
         }
+        .onChange(of: cadence) { _, value in
+            if value == .asNeeded { courseLength = nil }
+        }
+    }
+
+    /// A sensible first guess: a daily med runs for days, a recurring one
+    /// for a handful of its own units.
+    private var defaultCourse: DoseInterval {
+        if let interval {
+            return DoseInterval(count: interval.unit == .day ? 14 : 6, unit: interval.unit)
+        }
+        return DoseInterval(count: 10, unit: .day)
     }
 
     private var cadenceHint: String {
@@ -379,6 +431,7 @@ struct ItemEditSheet: View {
     @State private var dose: String
     @State private var schedule: Set<DoseSlot>
     @State private var interval: DoseInterval?
+    @State private var courseLength: DoseInterval?
     @State private var started: Date
     /// For a new long-term med: when the last dose went in, so the next due
     /// date is right from the first screen. Nil = not given yet.
@@ -393,6 +446,7 @@ struct ItemEditSheet: View {
         _dose = State(initialValue: item?.dose ?? "")
         _schedule = State(initialValue: Set(item?.schedule ?? []))
         _interval = State(initialValue: item?.interval)
+        _courseLength = State(initialValue: item?.courseLength)
         _started = State(initialValue: item?.firstIntroduced ?? Date())
     }
 
@@ -400,12 +454,18 @@ struct ItemEditSheet: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    NewItemFields(name: $name, kind: $kind, dose: $dose, schedule: $schedule, interval: $interval)
+                    NewItemFields(name: $name, kind: $kind, dose: $dose, schedule: $schedule,
+                                  interval: $interval, courseLength: $courseLength)
 
                     SectionHeader(title: existing == nil ? "Started" : "Started on")
                     DatePicker("Started", selection: $started, in: ...Date(), displayedComponents: .date)
                         .labelsHidden()
                         .datePickerStyle(.compact)
+                    if kind.isRegimen, let course = courseLength {
+                        Text("Course runs through \(shortDate(Item.courseEnd(start: started, length: course))).")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
                     if existing == nil, kind.isRegimen, interval == nil, !schedule.isEmpty {
                         Text("Backdating the start doesn't invent missed doses — tracking begins today.")
                             .font(.caption2)
@@ -528,6 +588,7 @@ struct ItemEditSheet: View {
     private func save() {
         let cadenceInterval = kind.isRegimen ? interval : nil
         let orderedSchedule = kind.isRegimen && cadenceInterval == nil ? DoseSlot.allCases.filter { schedule.contains($0) } : []
+        let course = (orderedSchedule.isEmpty && cadenceInterval == nil) ? nil : courseLength
         let trimmedDose = dose.trimmingCharacters(in: .whitespaces)
         if var item = existing {
             let wasScheduled = item.isScheduled
@@ -537,6 +598,7 @@ struct ItemEditSheet: View {
             item.schedule = orderedSchedule
             let wasRecurring = item.isRecurring
             item.interval = cadenceInterval
+            item.courseLength = course
             item.firstIntroduced = started
             if !wasScheduled, !orderedSchedule.isEmpty { item.trackedSince = Date() }
             // A cadence added to an existing item starts counting today; the
@@ -551,6 +613,7 @@ struct ItemEditSheet: View {
                             dose: trimmedDose,
                             schedule: orderedSchedule,
                             interval: cadenceInterval,
+                            courseLength: course,
                             trackedSince: Date())
             store.addItem(item)
             // The last dose of a long-term med is a real event: it anchors
@@ -689,11 +752,16 @@ struct RegimenRow: View {
         if let stopped = item.stopped {
             return "Stopped \(relativeDay(stopped)) · started \(shortDate(item.firstIntroduced))"
         }
+        let cadence = [item.cadenceLabel, item.courseLabel].compactMap { $0 }.joined(separator: " ")
         if let state = intervalState {
             let last = state.last.map { "last \(shortDate($0.date))" } ?? "none logged yet"
-            return "\(item.cadenceLabel) · \(last) · \(state.dueLabel.lowercased())"
+            let progress = state.progressLabel.map { " · \($0)" } ?? ""
+            return "\(cadence) · \(last) · \(state.dueLabel.lowercased())\(progress)"
         }
-        return "\(item.cadenceLabel) · since \(shortDate(item.firstIntroduced))"
+        if item.courseEnded, let end = item.plannedEnd() {
+            return "\(cadence) · course ended \(shortDate(end))"
+        }
+        return "\(cadence) · since \(shortDate(item.firstIntroduced))"
     }
 }
 
@@ -883,7 +951,11 @@ struct IntervalChecklist: View {
         let item = due.item
         let state = due.state
         Button {
-            store.setIntervalDose(petID: petID, item: item, status: state.isLogged ? nil : .given)
+            if state.isCourseComplete, !state.isLogged {
+                store.stopItem(id: item.id)
+            } else {
+                store.setIntervalDose(petID: petID, item: item, status: state.isLogged ? nil : .given)
+            }
         } label: {
             HStack(spacing: 10) {
                 Image(systemName: symbol(state))
@@ -898,7 +970,14 @@ struct IntervalChecklist: View {
                         .foregroundColor(state.isDue && !state.isLogged ? color(state) : .secondary)
                 }
                 Spacer()
-                if !state.isLogged {
+                if state.isCourseComplete, !state.isLogged {
+                    Text("Done with it")
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(Capsule().fill(Tier.normal.color.opacity(0.14)))
+                        .foregroundColor(Tier.normal.color)
+                } else if !state.isLogged {
                     Text("Given")
                         .font(.caption.weight(.semibold))
                         .padding(.horizontal, 10)
@@ -933,24 +1012,68 @@ struct IntervalChecklist: View {
     }
 
     private func detail(_ state: IntervalDoseState) -> String {
-        if let given = state.givenToday { return "Given \(timeOnly(given.date)) · next \(shortDate(state.nextDue))" }
-        var parts = [state.dueLabel]
-        if let last = state.last {
-            parts.append(last.status == .skipped ? "skipped \(shortDate(last.date))" : "last \(shortDate(last.date))")
+        var parts: [String] = []
+        if let given = state.givenToday {
+            parts.append("Given \(timeOnly(given.date))")
+            parts.append(state.isCourseComplete ? "that's the course done" : "next \(shortDate(state.nextDue))")
+        } else {
+            parts.append(state.dueLabel)
+            if let last = state.last, !state.isCourseComplete {
+                parts.append(last.status == .skipped ? "skipped \(shortDate(last.date))" : "last \(shortDate(last.date))")
+            }
         }
+        if let progress = state.progressLabel { parts.append(progress) }
         return parts.joined(separator: " · ")
     }
 
     private func symbol(_ state: IntervalDoseState) -> String {
         if state.isLogged { return "checkmark.circle.fill" }
+        if state.isCourseComplete { return "checkmark.seal.fill" }
         return state.isDue ? "circle" : "circle.dotted"
     }
 
     private func color(_ state: IntervalDoseState) -> Color {
-        if state.isLogged { return Tier.normal.color }
+        if state.isLogged || state.isCourseComplete { return Tier.normal.color }
         if state.isOverdue { return Tier.concern.color }
         if state.isDue { return Tier.monitor.color }
         return .secondary
+    }
+}
+
+/// A daily course that ran its planned length. It has already left the
+/// checklist; this is the one-tap "and we're done with it".
+struct FinishedCourseRow: View {
+    @EnvironmentObject var store: AppStore
+    let item: Item
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "checkmark.seal.fill")
+                .font(.title3)
+                .foregroundColor(Tier.normal.color)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(item.name + (item.dose.isEmpty ? "" : " · \(item.dose)"))
+                    .font(.subheadline)
+                Text("Course complete" + (item.plannedEnd().map { " · ended \(shortDate($0))" } ?? ""))
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+            Spacer()
+            Button {
+                store.stopItem(id: item.id, on: item.plannedEnd() ?? Date())
+            } label: {
+                Text("Done with it")
+                    .font(.caption.weight(.semibold))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(Capsule().fill(Tier.normal.color.opacity(0.14)))
+                    .foregroundColor(Tier.normal.color)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: DS.radius).fill(DS.surface))
     }
 }
 
@@ -968,7 +1091,7 @@ struct DoseStrip: View {
 
     var body: some View {
         let summaries = DoseSlot.allCases.compactMap { store.slotSummary(petID: petID, slot: $0) }
-        let dues = store.intervalDues(for: petID).filter { $0.state.isLogged || $0.state.daysUntilDue <= headsUpDays }
+        let dues = store.intervalDues(for: petID).filter { !$0.state.isCourseComplete && ($0.state.isLogged || $0.state.daysUntilDue <= headsUpDays) }
         if !summaries.isEmpty || !dues.isEmpty {
             FlowLayout(spacing: 8) {
                 ForEach(summaries, id: \.slot) { summary in
