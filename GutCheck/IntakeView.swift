@@ -1218,6 +1218,104 @@ struct IntakeRow: View {
     }
 }
 
+/// "Morning meds · 5 given" as one row. Tap to see each dose; long-press a
+/// dose inside to delete just that one.
+struct DoseGroupRow: View {
+    @EnvironmentObject var store: AppStore
+    let group: AppStore.DoseGroup
+    @State private var expanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: group.slot.symbol)
+                        .foregroundColor(ItemKind.med.tint)
+                        .frame(width: 24)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(title)
+                            .font(.subheadline)
+                            .foregroundColor(.primary)
+                        Text(names)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .lineLimit(expanded ? nil : 1)
+                    }
+                    Spacer()
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Text(shortDate(group.day))
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                        Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .padding(10)
+            }
+            .buttonStyle(.plain)
+            if expanded {
+                VStack(spacing: 6) {
+                    ForEach(group.intakes) { intake in
+                        HStack(spacing: 10) {
+                            Image(systemName: intake.status == .skipped ? "minus.circle" : "checkmark.circle.fill")
+                                .font(.caption)
+                                .foregroundColor(intake.status == .skipped ? .secondary : Tier.normal.color)
+                                .frame(width: 24)
+                            Text(line(intake))
+                                .font(.caption)
+                                .strikethrough(intake.status == .skipped, color: .secondary)
+                            Spacer()
+                            Text(timeOnly(intake.date))
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                        .contextMenu {
+                            Button(role: .destructive) {
+                                store.removeIntake(id: intake.id)
+                            } label: {
+                                Label("Delete this dose", systemImage: "trash")
+                            }
+                        }
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.bottom, 10)
+            }
+        }
+        .background(RoundedRectangle(cornerRadius: DS.rowRadius).fill(DS.surface))
+        .contextMenu {
+            Button(role: .destructive) {
+                group.intakes.forEach { store.removeIntake(id: $0.id) }
+            } label: {
+                Label("Delete all \(group.intakes.count) doses", systemImage: "trash")
+            }
+        }
+    }
+
+    private var title: String {
+        var parts = ["\(group.given) given"]
+        if group.skipped > 0 { parts.append("\(group.skipped) skipped") }
+        return "\(group.slot.label) meds · " + parts.joined(separator: ", ")
+    }
+
+    private var names: String {
+        group.intakes
+            .compactMap { store.item($0.itemID)?.name }
+            .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+            .joined(separator: ", ")
+    }
+
+    private func line(_ intake: IntakeEvent) -> String {
+        let name = store.item(intake.itemID)?.name ?? "Unknown item"
+        var text = intake.amount.isEmpty ? name : "\(name) · \(intake.amount)"
+        if !intake.note.isEmpty { text += " · “\(intake.note)”" }
+        return text
+    }
+}
+
 // MARK: - Small helpers
 
 extension ItemKind {

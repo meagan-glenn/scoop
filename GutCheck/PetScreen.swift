@@ -262,15 +262,22 @@ struct PetScreen: View {
                 .font(.subheadline)
                 .foregroundColor(.secondary)
         }
-        ForEach(entries) { entry in
-            timelineRow(entry)
-                .contextMenu {
-                    Button(role: .destructive) {
-                        delete(entry)
-                    } label: {
-                        Label("Delete entry", systemImage: "trash")
-                    }
+        // Tighter than the screen's section spacing: rows are a list, not cards.
+        VStack(spacing: 8) {
+            ForEach(entries) { entry in
+                if case .doses(let group) = entry {
+                    DoseGroupRow(group: group)
+                } else {
+                    timelineRow(entry)
+                        .contextMenu {
+                            Button(role: .destructive) {
+                                delete(entry)
+                            } label: {
+                                Label("Delete entry", systemImage: "trash")
+                            }
+                        }
                 }
+            }
         }
     }
 
@@ -297,6 +304,8 @@ struct PetScreen: View {
             ExposureRow(exposure: exposure)
         case .intake(let intake):
             IntakeRow(intake: intake)
+        case .doses(let group):
+            DoseGroupRow(group: group)
         case .crossFeed(let feed):
             HStack(spacing: 10) {
                 Image(systemName: "fork.knife.circle.fill")
@@ -321,6 +330,7 @@ struct PetScreen: View {
         case .exposure(let exposure): store.removeExposure(id: exposure.id)
         case .crossFeed(let feed): store.removeCrossFeed(id: feed.id)
         case .intake(let intake): store.removeIntake(id: intake.id)
+        case .doses(let group): group.intakes.forEach { store.removeIntake(id: $0.id) }
         }
     }
 

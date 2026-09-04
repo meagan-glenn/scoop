@@ -709,12 +709,28 @@ final class AppStore: ObservableObject {
 
     // MARK: - Unified timeline
 
+    /// One slot's routine doses on one day, folded into a single timeline
+    /// row. Five meds twice a day is ten rows a day otherwise, and none of
+    /// them is news — the timeline is for what's worth noticing.
+    struct DoseGroup: Identifiable, Equatable {
+        var slot: DoseSlot
+        var day: Date
+        /// Latest first.
+        var intakes: [IntakeEvent]
+
+        var id: UUID { intakes.first?.id ?? UUID() }
+        var date: Date { intakes.first?.date ?? day }
+        var given: Int { intakes.filter { $0.status == .given }.count }
+        var skipped: Int { intakes.filter { $0.status == .skipped }.count }
+    }
+
     enum TimelineEntry: Identifiable {
         case output(OutputEvent)
         case intervention(Intervention)
         case exposure(ExposureEvent)
         case crossFeed(CrossFeed)
         case intake(IntakeEvent)
+        case doses(DoseGroup)
 
         var id: UUID {
             switch self {
@@ -723,6 +739,7 @@ final class AppStore: ObservableObject {
             case .exposure(let e): return e.id
             case .crossFeed(let e): return e.id
             case .intake(let e): return e.id
+            case .doses(let g): return g.id
             }
         }
 
@@ -733,6 +750,7 @@ final class AppStore: ObservableObject {
             case .exposure(let e): return e.date
             case .crossFeed(let e): return e.date
             case .intake(let e): return e.date
+            case .doses(let g): return g.date
             }
         }
     }
@@ -743,7 +761,31 @@ final class AppStore: ObservableObject {
         entries += data.interventions.filter { $0.petID == petID && $0.date >= since }.map { .intervention($0) }
         entries += data.exposures.filter { $0.applies(to: petID) && $0.date >= since }.map { .exposure($0) }
         entries += data.crossFeeds.filter { $0.eaterID == petID && $0.date >= since }.map { .crossFeed($0) }
-        entries += data.intakes.filter { $0.petID == petID && $0.date >= since }.map { .intake($0) }
+
+        // Routine slot doses fold into one row per slot per day. Everything
+        // else an animal is given (a treat, an extra dose, a monthly shot)
+        // stays its own row: those are the ones that precede episodes.
+        let intakes = data.intakes.filter { $0.petID == petID && $0.date >= since }
+        let calendar = Calendar.current
+        var groups: [String: DoseGroup] = [:]
+        for intake in intakes {
+            guard let slot = intake.slot else {
+                entries.append(.intake(intake))
+                continue
+            }
+            let day = calendar.startOfDay(for: intake.date)
+            let key = "\(day.timeIntervalSince1970)|\(slot.rawValue)"
+            groups[key, default: DoseGroup(slot: slot, day: day, intakes: [])].intakes.append(intake)
+        }
+        for group in groups.values {
+            var sorted = group
+            sorted.intakes.sort { $0.date > $1.date }
+            if sorted.intakes.count == 1 {
+                entries.append(.intake(sorted.intakes[0]))
+            } else {
+                entries.append(.doses(sorted))
+            }
+        }
         return entries.sorted { $0.date > $1.date }
     }
 
