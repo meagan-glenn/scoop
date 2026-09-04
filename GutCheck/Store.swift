@@ -251,12 +251,18 @@ final class AppStore: ObservableObject {
         data.items.filter { $0.applies(to: petID) }
     }
 
-    /// Active meds and supplements for this animal, scheduled first.
+    /// Active meds and supplements for this animal: daily first, then the
+    /// long-term recurring ones, then as-needed.
     func regimen(for petID: UUID) -> [Item] {
-        items(for: petID)
+        func rank(_ item: Item) -> Int {
+            if item.isScheduled { return 0 }
+            if item.isRecurring { return 1 }
+            return 2
+        }
+        return items(for: petID)
             .filter { $0.kind.isRegimen && $0.isActive }
             .sorted { a, b in
-                if a.isScheduled != b.isScheduled { return a.isScheduled }
+                if rank(a) != rank(b) { return rank(a) < rank(b) }
                 return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
             }
     }
@@ -266,6 +272,49 @@ final class AppStore: ObservableObject {
         regimen(for: petID).filter { item in
             item.isScheduled && (slot.map { item.schedule.contains($0) } ?? true)
         }
+    }
+
+    // MARK: Long-term (interval) meds
+
+    /// One recurring med and where it stands.
+    struct IntervalDue: Identifiable, Equatable {
+        var item: Item
+        var state: IntervalDoseState
+        var id: UUID { item.id }
+    }
+
+    /// Active meds on a long-term cadence for this animal.
+    func recurringItems(for petID: UUID) -> [Item] {
+        regimen(for: petID).filter(\.isRecurring)
+    }
+
+    func intervalState(petID: UUID, item: Item, now: Date = Date()) -> IntervalDoseState? {
+        intervalDoseState(item: item, intakes: intakes(for: petID, itemID: item.id), now: now)
+    }
+
+    /// Every recurring med for this animal with its status, soonest due first.
+    func intervalDues(for petID: UUID, now: Date = Date()) -> [IntervalDue] {
+        recurringItems(for: petID)
+            .compactMap { item in
+                intervalState(petID: petID, item: item, now: now).map { IntervalDue(item: item, state: $0) }
+            }
+            .sorted { $0.state.nextDue < $1.state.nextDue }
+    }
+
+    /// Recurring meds that are due today or late, across the household —
+    /// what the home screen and the reminders care about.
+    func overdueIntervals(for petID: UUID, now: Date = Date()) -> [IntervalDue] {
+        intervalDues(for: petID, now: now).filter { $0.state.isDue && !$0.state.isLogged }
+    }
+
+    /// "Gave the monthly one." Logs the dose; tapping the same day's dose
+    /// again (status nil) removes it, so a mis-tap is one tap back.
+    func setIntervalDose(petID: UUID, item: Item, date: Date = Date(), status: IntakeStatus?) {
+        if let today = intervalState(petID: petID, item: item, now: date)?.givenToday {
+            removeIntake(id: today.id)
+        }
+        guard let status else { return }
+        logIntake(petID: petID, itemID: item.id, date: date, amount: item.dose, status: status)
     }
 
     /// Any animal in the house on a scheduled regimen — the reminder trigger.
@@ -698,6 +747,8 @@ final class AppStore: ObservableObject {
         var exposures: [ExposureEvent]
         var intakes: [IntakeEvent]
         var missedDoses: [MissedDose]
+        /// Long-term meds that are due or late right now.
+        var overdueIntervals: [IntervalDue]
     }
 
     func lookback(petID: UUID, hours: Double = 48) -> Lookback {
@@ -722,8 +773,9 @@ final class AppStore: ObservableObject {
             .filter { $0.petID == petID && $0.date >= cutoff && $0.status == .given }
             .sorted { $0.date > $1.date }
         let missed = missedDoses(for: petID, from: cutoff)
+        let late = overdueIntervals(for: petID)
         return Lookback(newItems: relevantItems, crossFeeds: feeds, interventions: meds, outputs: outs,
-                        exposures: exposed, intakes: given, missedDoses: missed)
+                        exposures: exposed, intakes: given, missedDoses: missed, overdueIntervals: late)
     }
 
     // MARK: - Seed data
@@ -762,6 +814,23 @@ final class AppStore: ObservableObject {
             seeded.intakes.append(IntakeEvent(petID: navi.id, itemID: probiotic.id, date: morning,
                                               amount: "1 capsule", slot: .morning))
         }
+        // Arya's monthly joint injection, on schedule; Albus's monthly heartworm
+        // chew, a few days late. Both long-term: the next dose is derived
+        // from the last, so the demo shows one "due in" and one "overdue".
+        let injection = Item(name: "Librela", scope: .pet(arya.id), kind: .med,
+                             firstIntroduced: daysAgo(140), dose: "1 injection", interval: .monthly)
+        seeded.items.append(injection)
+        for dayBack in [140.0, 110, 80, 50, 20] {
+            seeded.intakes.append(IntakeEvent(petID: arya.id, itemID: injection.id, date: daysAgo(dayBack),
+                                              amount: "1 injection", note: dayBack == 140 ? "first dose at the vet" : ""))
+        }
+        let heartworm = Item(name: "Heartgard", scope: .pet(albus.id), kind: .med,
+                             firstIntroduced: daysAgo(200), dose: "1 chew", interval: .monthly)
+        seeded.items.append(heartworm)
+        for dayBack in [200.0, 170, 140, 110, 80, 50, 34] {
+            seeded.intakes.append(IntakeEvent(petID: albus.id, itemID: heartworm.id, date: daysAgo(dayBack), amount: "1 chew"))
+        }
+
         // …and a piece of banana ~34h before the episode opened.
         let banana = Item(name: "Banana", scope: .household, kind: .treat, firstIntroduced: daysAgo(2.4))
         seeded.items.append(banana)

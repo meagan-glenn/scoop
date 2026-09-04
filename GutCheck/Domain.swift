@@ -531,6 +531,79 @@ enum DoseSlot: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+/// How often a long-term med recurs when it isn't a daily slot: a monthly
+/// heartworm chew, a monthly joint injection, a flea treatment every three
+/// months. The next dose is derived from the last one given, never stored,
+/// so a late dose simply moves the whole schedule rather than piling up.
+struct DoseInterval: Codable, Equatable, Hashable {
+    enum Unit: String, Codable, CaseIterable, Identifiable {
+        case day
+        case week
+        case month
+
+        var id: String { rawValue }
+
+        var component: Calendar.Component {
+            switch self {
+            case .day: return .day
+            case .week: return .weekOfYear
+            case .month: return .month
+            }
+        }
+
+        /// "day" / "days"
+        func label(_ count: Int) -> String {
+            rawValue + (count == 1 ? "" : "s")
+        }
+    }
+
+    var count: Int
+    var unit: Unit
+
+    init(count: Int, unit: Unit) {
+        self.count = max(1, count)
+        self.unit = unit
+    }
+
+    static let weekly = DoseInterval(count: 1, unit: .week)
+    static let everyTwoWeeks = DoseInterval(count: 2, unit: .week)
+    static let monthly = DoseInterval(count: 1, unit: .month)
+    static let everyThreeMonths = DoseInterval(count: 3, unit: .month)
+
+    /// The common cadences, one tap away. Anything else is a count and a unit.
+    static let presets: [DoseInterval] = [.weekly, .everyTwoWeeks, .monthly, .everyThreeMonths]
+
+    /// "Every month", "Every 2 weeks", "Every other day".
+    var label: String {
+        if count == 2, unit == .day { return "Every other day" }
+        if count == 1 {
+            switch unit {
+            case .day: return "Every day"
+            case .week: return "Every week"
+            case .month: return "Every month"
+            }
+        }
+        return "Every \(count) \(unit.label(count))"
+    }
+
+    /// "Monthly dose", "Weekly dose", "Dose every 3 months" — for a timeline row.
+    var doseLabel: String {
+        if count == 1 {
+            switch unit {
+            case .day: return "Daily dose"
+            case .week: return "Weekly dose"
+            case .month: return "Monthly dose"
+            }
+        }
+        return "Dose every \(count) \(unit.label(count))"
+    }
+
+    /// When the next dose falls, counting from the last one.
+    func next(after date: Date, calendar: Calendar = .current) -> Date {
+        calendar.date(byAdding: unit.component, value: count, to: date) ?? date.addingTimeInterval(Double(count) * 30 * 24 * 3600)
+    }
+}
+
 /// A named thing the animal gets: a med, a supplement, a food, a treat. Named
 /// so that the third time banana shows up before an episode, the app can say
 /// so — a free-text note never becomes a pattern.
@@ -543,8 +616,12 @@ struct Item: Identifiable, Codable, Equatable {
     var firstIntroduced: Date
     /// Default amount per dose — "250mg", "1 tsp", "a few bites".
     var dose: String
-    /// Daily slots this is due in. Empty = as needed / one-off.
+    /// Daily slots this is due in. Empty = as needed / one-off, unless an
+    /// `interval` makes it a long-term recurring dose.
     var schedule: [DoseSlot]
+    /// Long-term cadence (monthly heartworm, a monthly injection). Mutually
+    /// exclusive with `schedule`: a med is daily or it recurs, not both.
+    var interval: DoseInterval?
     /// Adherence is only counted from here: backdating "started two weeks
     /// ago" must not invent two weeks of missed doses.
     var trackedSince: Date
@@ -552,14 +629,16 @@ struct Item: Identifiable, Codable, Equatable {
     var stopped: Date?
 
     init(id: UUID = UUID(), name: String, scope: ItemScope, kind: ItemKind, firstIntroduced: Date,
-         dose: String = "", schedule: [DoseSlot] = [], trackedSince: Date? = nil, stopped: Date? = nil) {
+         dose: String = "", schedule: [DoseSlot] = [], interval: DoseInterval? = nil,
+         trackedSince: Date? = nil, stopped: Date? = nil) {
         self.id = id
         self.name = name
         self.scope = scope
         self.kind = kind
         self.firstIntroduced = firstIntroduced
         self.dose = dose
-        self.schedule = schedule
+        self.schedule = interval == nil ? schedule : []
+        self.interval = interval
         self.trackedSince = trackedSince ?? firstIntroduced
         self.stopped = stopped
     }
@@ -576,12 +655,23 @@ struct Item: Identifiable, Codable, Equatable {
         firstIntroduced = try container.decodeIfPresent(Date.self, forKey: .firstIntroduced) ?? Date()
         dose = try container.decodeIfPresent(String.self, forKey: .dose) ?? ""
         schedule = try container.decodeIfPresent([DoseSlot].self, forKey: .schedule) ?? []
+        interval = try container.decodeIfPresent(DoseInterval.self, forKey: .interval)
         trackedSince = try container.decodeIfPresent(Date.self, forKey: .trackedSince) ?? firstIntroduced
         stopped = try container.decodeIfPresent(Date.self, forKey: .stopped)
     }
 
     var isActive: Bool { stopped == nil }
+    /// On a daily slot schedule (checklist, 7am/7pm reminders).
     var isScheduled: Bool { isActive && !schedule.isEmpty }
+    /// On a long-term cadence (next dose derived from the last).
+    var isRecurring: Bool { isActive && interval != nil }
+
+    /// "Morning & Evening" / "Every month" / "As needed".
+    var cadenceLabel: String {
+        if let interval { return interval.label }
+        if schedule.isEmpty { return "As needed" }
+        return schedule.map(\.label).joined(separator: " & ")
+    }
 
     func applies(to pet: UUID) -> Bool {
         switch scope {
@@ -679,6 +769,55 @@ func doseState(intakes: [IntakeEvent], slot: DoseSlot, day: Date, now: Date = Da
     }
     if now >= dayEnd { return .missed }
     return now >= slot.dueDate(on: day, calendar: calendar) ? .due : .upcoming
+}
+
+/// Where a long-term recurring dose stands, derived from the last one logged
+/// so nothing has to run in the background to notice a monthly chew is late.
+struct IntervalDoseState: Equatable {
+    /// The most recent dose logged, given or deliberately skipped. A skip
+    /// still anchors the next due date — the vet said "not this month", not
+    /// "never again".
+    var last: IntakeEvent?
+    /// Start of the day the next dose falls on.
+    var nextDue: Date
+    /// Whole days from today to `nextDue`; zero = due today, negative = late.
+    var daysUntilDue: Int
+    /// A dose logged today. Lets the home screen undo a mis-tap in place.
+    var givenToday: IntakeEvent?
+
+    var isDue: Bool { daysUntilDue <= 0 }
+    var isOverdue: Bool { daysUntilDue < 0 }
+    var isLogged: Bool { givenToday != nil }
+
+    /// "Due today" / "Due in 12 days" / "3 days overdue".
+    var dueLabel: String {
+        if daysUntilDue == 0 { return "Due today" }
+        if daysUntilDue == 1 { return "Due tomorrow" }
+        if daysUntilDue > 0 { return "Due in \(daysUntilDue) days" }
+        let late = -daysUntilDue
+        return "\(late) day\(late == 1 ? "" : "s") overdue"
+    }
+}
+
+/// Pure interval rule, shared by the checklist, the reminders and the summary.
+/// `intakes` should already be scoped to the animal; the item filter is a
+/// belt-and-braces. With no dose logged yet the first one is due the day
+/// tracking began (the start date, or the day a cadence was added to an
+/// existing item), so "nothing logged" reads as due rather than silently
+/// fine — and never as months overdue for a med that was simply untracked.
+func intervalDoseState(item: Item, intakes: [IntakeEvent], now: Date = Date(),
+                       calendar: Calendar = .current) -> IntervalDoseState? {
+    guard let interval = item.interval else { return nil }
+    let logged = intakes
+        .filter { $0.itemID == item.id }
+        .sorted { $0.date > $1.date }
+    let last = logged.first
+    let nextDue = last.map { interval.next(after: $0.date, calendar: calendar) } ?? max(item.firstIntroduced, item.trackedSince)
+    let dueDay = calendar.startOfDay(for: nextDue)
+    let today = calendar.startOfDay(for: now)
+    let days = calendar.dateComponents([.day], from: today, to: dueDay).day ?? 0
+    let givenToday = logged.first { $0.status == .given && calendar.isDate($0.date, inSameDayAs: now) }
+    return IntervalDoseState(last: last, nextDue: dueDay, daysUntilDue: days, givenToday: givenToday)
 }
 
 struct OutputEvent: Identifiable, Codable, Equatable {

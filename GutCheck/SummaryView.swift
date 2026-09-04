@@ -178,12 +178,30 @@ struct SummarySheet: View {
                 return a.firstIntroduced > b.firstIntroduced
             }
             .map { item in
-                let when = item.schedule.isEmpty ? "as needed" : item.schedule.map { $0.label.lowercased() }.joined(separator: " & ")
+                let when = item.cadenceLabel.lowercased()
                 var status = "\(item.dose.isEmpty ? "" : item.dose + " · ")\(when) · started \(shortDate(item.firstIntroduced))"
                 if let stopped = item.stopped { status += " · stopped \(shortDate(stopped))" }
 
                 var adherence: String?
-                if !item.schedule.isEmpty {
+                if item.interval != nil, let state = store.intervalState(petID: petID, item: item) {
+                    // A long-term med is judged on the last dose and the next,
+                    // not on a daily tally.
+                    var parts: [String] = []
+                    if let last = state.last {
+                        parts.append((last.status == .skipped ? "Last skipped " : "Last given ") + shortDate(last.date))
+                    } else {
+                        parts.append("No dose logged yet")
+                    }
+                    if item.isActive {
+                        parts.append(state.isOverdue
+                                     ? "next was due \(shortDate(state.nextDue)) (\(state.dueLabel.lowercased()))"
+                                     : "next due \(shortDate(state.nextDue))")
+                    }
+                    let given = store.intakes(for: petID, itemID: item.id)
+                        .filter { $0.status == .given && $0.date >= windowStart }.count
+                    if given > 0 { parts.append("\(given) dose\(given == 1 ? "" : "s") in the window") }
+                    adherence = parts.joined(separator: " · ")
+                } else if !item.schedule.isEmpty {
                     let counts = store.adherence(for: petID, item: item, from: windowStart)
                     if counts.scheduled > 0 {
                         adherence = "Given \(counts.given) of \(counts.scheduled) scheduled doses"
@@ -288,13 +306,16 @@ struct SummarySheet: View {
         for block in medBlocks where block.item.isActive {
             if let since = block.sinceLine, let before = block.beforeLine {
                 questions.append("\(block.item.name): \(before.lowercased()); \(since.lowercased()). Keep going, adjust, or stop?")
-            } else if block.item.kind == .med {
+            } else if block.item.kind == .med, block.item.interval == nil {
                 questions.append("\(block.item.name): still the right call, and for how long?")
             }
         }
         let missedTotal = store.missedDoses(for: petID, from: windowStart).count
         if missedTotal >= 3 {
             questions.append("\(missedTotal) scheduled doses were missed this month. Does that change the read on whether it's working?")
+        }
+        for due in store.intervalDues(for: petID) where due.state.daysUntilDue <= -7 {
+            questions.append("\(due.item.name) is \(due.state.dueLabel.lowercased()). Does the gap matter, and should the schedule reset from the next dose?")
         }
         if !suspectedTriggers.isEmpty {
             questions.append("Do any of the items or events preceding episodes warrant an elimination trial?")

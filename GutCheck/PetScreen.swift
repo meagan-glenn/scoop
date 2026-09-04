@@ -119,9 +119,10 @@ struct PetScreen: View {
     private var regimenSection: some View {
         let regimen = store.regimen(for: petID)
         if !regimen.isEmpty {
-            SectionHeader(title: "Today's meds")
+            SectionHeader(title: regimen.contains(where: \.isScheduled) ? "Today's meds" : "Meds")
             DoseChecklist(petID: petID)
-            let asNeeded = regimen.filter { !$0.isScheduled }
+            IntervalChecklist(petID: petID)
+            let asNeeded = regimen.filter { !$0.isScheduled && !$0.isRecurring }
             if !asNeeded.isEmpty {
                 Text("As needed: " + asNeeded.map { $0.name + ($0.dose.isEmpty ? "" : " \($0.dose)") }.joined(separator: ", "))
                     .font(.caption)

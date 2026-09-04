@@ -59,6 +59,10 @@ struct GutCheckApp: App {
                 .onChange(of: scenePhase) { _, phase in
                     if phase == .active {
                         Task { await CloudSync.shared.fetchNow() }
+                        // A long-term med's one-shot reminder has fired by
+                        // now if it was due; rebuilding turns it into the
+                        // daily nag until the dose is logged.
+                        Task { await DoseReminders.shared.resync() }
                     }
                 }
         }

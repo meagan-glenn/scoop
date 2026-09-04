@@ -19,10 +19,14 @@ struct IntakeSheet: View {
     @State private var newKind: ItemKind = .treat
     @State private var newDose = ""
     @State private var newSchedule: Set<DoseSlot> = []
+    @State private var newInterval: DoseInterval?
     @State private var amount = ""
     @State private var slot: DoseSlot?
     @State private var timing: LogTiming = .justNow
     @State private var pickedTime: Date = Date()
+    /// Long-term doses get a real date: the injection was at the vet last
+    /// Tuesday, not "yesterday".
+    @State private var pickedDate: Date = Date()
     @State private var note = ""
 
     private var soloPet: Pet? {
@@ -33,6 +37,11 @@ struct IntakeSheet: View {
 
     private var selectedItem: Item? {
         selectedItemID.flatMap { store.item($0) }
+    }
+
+    /// Whether what's being logged is a long-term recurring dose.
+    private var isRecurringDose: Bool {
+        creatingNew ? (newKind.isRegimen && newInterval != nil) : (selectedItem?.interval != nil)
     }
 
     private var canSave: Bool {
@@ -77,7 +86,22 @@ struct IntakeSheet: View {
                     PillTextField(placeholder: amountPlaceholder, text: $amount)
 
                     SectionHeader(title: "When?")
-                    TimingPicker(timing: $timing, pickedTime: $pickedTime)
+                    if isRecurringDose {
+                        HStack {
+                            Text("Given on")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                            Spacer()
+                            DatePicker("Given on", selection: $pickedDate, in: ...Date(), displayedComponents: [.date, .hourAndMinute])
+                                .labelsHidden()
+                                .datePickerStyle(.compact)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(RoundedRectangle(cornerRadius: 12).fill(Color(.secondarySystemBackground)))
+                    } else {
+                        TimingPicker(timing: $timing, pickedTime: $pickedTime)
+                    }
 
                     PillTextField(placeholder: "Note", text: $note)
 
@@ -130,7 +154,7 @@ struct IntakeSheet: View {
             }
         }
         if creatingNew {
-            NewItemFields(name: $newName, kind: $newKind, dose: $newDose, schedule: $newSchedule)
+            NewItemFields(name: $newName, kind: $newKind, dose: $newDose, schedule: $newSchedule, interval: $newInterval)
                 .onChange(of: newDose) { _, value in
                     if amount.isEmpty || amount == newDose { amount = value }
                 }
@@ -158,22 +182,24 @@ struct IntakeSheet: View {
 
     private func save() {
         guard let petID = effectivePetID else { return }
-        let date = timing.resolve(pickedTime: pickedTime)
+        let date = isRecurringDose ? min(pickedDate, Date()) : timing.resolve(pickedTime: pickedTime)
         var itemID = selectedItemID
         var doseSlot = slot
         if creatingNew {
-            let schedule = newKind.isRegimen ? DoseSlot.allCases.filter { newSchedule.contains($0) } : []
+            let interval = newKind.isRegimen ? newInterval : nil
+            let schedule = newKind.isRegimen && interval == nil ? DoseSlot.allCases.filter { newSchedule.contains($0) } : []
             let item = Item(name: newName.trimmingCharacters(in: .whitespaces),
                             scope: newKind.defaultsToHousehold ? .household : .pet(petID),
                             kind: newKind,
                             firstIntroduced: date,
                             dose: newDose.trimmingCharacters(in: .whitespaces),
                             schedule: schedule,
+                            interval: interval,
                             trackedSince: Date())
             store.addItem(item)
             itemID = item.id
             doseSlot = schedule.isEmpty ? nil : (schedule.contains(DoseSlot.current(at: date)) ? DoseSlot.current(at: date) : schedule.first)
-            if !schedule.isEmpty {
+            if !schedule.isEmpty || interval != nil {
                 Task { await DoseReminders.shared.requestAuthorization() }
             }
         }
@@ -213,12 +239,30 @@ struct PetPickerRow: View {
 }
 
 /// The fields that define a new item, shared by the in-place create and the
-/// full editor. Schedule only appears for meds and supplements.
+/// full editor. Cadence only appears for meds and supplements: daily slots,
+/// a long-term interval (monthly heartworm, a monthly injection), or as
+/// needed.
 struct NewItemFields: View {
     @Binding var name: String
     @Binding var kind: ItemKind
     @Binding var dose: String
     @Binding var schedule: Set<DoseSlot>
+    @Binding var interval: DoseInterval?
+
+    /// Which cadence family is picked. Daily and interval are exclusive.
+    private enum Cadence: Equatable {
+        case asNeeded
+        case daily
+        case interval
+    }
+
+    /// "Other…" reveals a count-and-unit stepper for cadences off the preset list.
+    @State private var customInterval = false
+
+    private var cadence: Cadence {
+        if interval != nil { return .interval }
+        return schedule.isEmpty ? .asNeeded : .daily
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -227,26 +271,77 @@ struct NewItemFields: View {
                 ForEach(ItemKind.allCases) { option in
                     Chip(label: option.label, isSelected: kind == option, tint: option.tint) {
                         kind = option
-                        if !option.isRegimen { schedule = [] }
+                        if !option.isRegimen {
+                            schedule = []
+                            interval = nil
+                        }
                     }
                 }
             }
             if kind.isRegimen {
                 PillTextField(placeholder: "Usual dose — 250mg, 1 tsp, 0.5ml", text: $dose)
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Every day?")
+                    Text("How often?")
                         .font(.caption)
                         .foregroundColor(.secondary)
-                    HStack(spacing: 8) {
-                        ForEach(DoseSlot.allCases) { slot in
-                            Chip(label: "\(slot.label) · \(slot.hourLabel)", isSelected: schedule.contains(slot), tint: .accentColor) {
-                                if schedule.contains(slot) { schedule.remove(slot) } else { schedule.insert(slot) }
+                    FlowLayout(spacing: 8) {
+                        Chip(label: "Every day", isSelected: cadence == .daily, tint: .accentColor) {
+                            interval = nil
+                            customInterval = false
+                            if schedule.isEmpty { schedule = [.morning] }
+                        }
+                        ForEach(DoseInterval.presets, id: \.self) { preset in
+                            Chip(label: preset.label, isSelected: interval == preset && !customInterval, tint: .accentColor) {
+                                schedule = []
+                                interval = preset
+                                customInterval = false
+                            }
+                        }
+                        Chip(label: "Other…", isSelected: customInterval, tint: .accentColor) {
+                            schedule = []
+                            customInterval = true
+                            if interval.map({ DoseInterval.presets.contains($0) }) ?? true {
+                                interval = DoseInterval(count: 2, unit: .day)
+                            }
+                        }
+                        Chip(label: "As needed", isSelected: cadence == .asNeeded, tint: .accentColor) {
+                            schedule = []
+                            interval = nil
+                            customInterval = false
+                        }
+                    }
+                    if cadence == .daily {
+                        HStack(spacing: 8) {
+                            ForEach(DoseSlot.allCases) { slot in
+                                Chip(label: "\(slot.label) · \(slot.hourLabel)", isSelected: schedule.contains(slot), tint: .accentColor) {
+                                    if schedule.contains(slot) {
+                                        // Keep at least one slot; "no slots" is the As-needed chip.
+                                        if schedule.count > 1 { schedule.remove(slot) }
+                                    } else {
+                                        schedule.insert(slot)
+                                    }
+                                }
                             }
                         }
                     }
-                    Text(schedule.isEmpty
-                         ? "Leave both off for an as-needed med."
-                         : "You'll get a reminder at each time, and missed doses show up in the record.")
+                    if customInterval, let current = interval {
+                        HStack(spacing: 10) {
+                            Stepper(value: Binding(
+                                get: { current.count },
+                                set: { interval = DoseInterval(count: $0, unit: current.unit) }
+                            ), in: 1...52) {
+                                Text("Every \(current.count)")
+                                    .font(.subheadline)
+                            }
+                            .fixedSize()
+                            ForEach(DoseInterval.Unit.allCases) { unit in
+                                Chip(label: unit.label(current.count), isSelected: current.unit == unit, tint: .accentColor) {
+                                    interval = DoseInterval(count: current.count, unit: unit)
+                                }
+                            }
+                        }
+                    }
+                    Text(cadenceHint)
                         .font(.caption2)
                         .foregroundColor(.secondary)
                 }
@@ -254,6 +349,17 @@ struct NewItemFields: View {
         }
         .padding(12)
         .background(RoundedRectangle(cornerRadius: DS.rowRadius).fill(DS.surface))
+        .onAppear {
+            if let interval, !DoseInterval.presets.contains(interval) { customInterval = true }
+        }
+    }
+
+    private var cadenceHint: String {
+        switch cadence {
+        case .asNeeded: return "Logged as it happens; no reminders."
+        case .daily: return "You'll get a reminder at each time, and missed doses show up in the record."
+        case .interval: return "The next dose is counted from the last one you log. You'll get a reminder on the day, and a nudge each morning it's late."
+        }
     }
 }
 
@@ -272,7 +378,11 @@ struct ItemEditSheet: View {
     @State private var kind: ItemKind
     @State private var dose: String
     @State private var schedule: Set<DoseSlot>
+    @State private var interval: DoseInterval?
     @State private var started: Date
+    /// For a new long-term med: when the last dose went in, so the next due
+    /// date is right from the first screen. Nil = not given yet.
+    @State private var lastGiven: Date? = Date()
     @State private var showDeleteConfirm = false
 
     init(petID: UUID, item: Item? = nil, defaultKind: ItemKind = .med) {
@@ -282,6 +392,7 @@ struct ItemEditSheet: View {
         _kind = State(initialValue: item?.kind ?? defaultKind)
         _dose = State(initialValue: item?.dose ?? "")
         _schedule = State(initialValue: Set(item?.schedule ?? []))
+        _interval = State(initialValue: item?.interval)
         _started = State(initialValue: item?.firstIntroduced ?? Date())
     }
 
@@ -289,16 +400,21 @@ struct ItemEditSheet: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    NewItemFields(name: $name, kind: $kind, dose: $dose, schedule: $schedule)
+                    NewItemFields(name: $name, kind: $kind, dose: $dose, schedule: $schedule, interval: $interval)
 
                     SectionHeader(title: existing == nil ? "Started" : "Started on")
                     DatePicker("Started", selection: $started, in: ...Date(), displayedComponents: .date)
                         .labelsHidden()
                         .datePickerStyle(.compact)
-                    if existing == nil, !schedule.isEmpty {
+                    if existing == nil, kind.isRegimen, interval == nil, !schedule.isEmpty {
                         Text("Backdating the start doesn't invent missed doses — tracking begins today.")
                             .font(.caption2)
                             .foregroundColor(.secondary)
+                    }
+
+                    if existing == nil, kind.isRegimen, let interval {
+                        SectionHeader(title: "Last dose")
+                        lastDoseFields(interval: interval)
                     }
 
                     Button {
@@ -369,28 +485,82 @@ struct ItemEditSheet: View {
         }
     }
 
+    /// "Given already, on this date" or "not yet" — the one fact a monthly
+    /// med needs before its next due date means anything.
+    @ViewBuilder
+    private func lastDoseFields(interval: DoseInterval) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Chip(label: "Already given", isSelected: lastGiven != nil, tint: .accentColor) {
+                    if lastGiven == nil { lastGiven = Date() }
+                }
+                Chip(label: "Not yet", isSelected: lastGiven == nil, tint: .accentColor) {
+                    lastGiven = nil
+                }
+            }
+            if let given = lastGiven {
+                HStack {
+                    Text("Last given on")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    DatePicker("Last given", selection: Binding(
+                        get: { given },
+                        set: { lastGiven = $0 }
+                    ), in: ...Date(), displayedComponents: .date)
+                        .labelsHidden()
+                        .datePickerStyle(.compact)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(RoundedRectangle(cornerRadius: 12).fill(Color(.secondarySystemBackground)))
+                Text("That dose goes in the record, and the next one is due \(shortDate(interval.next(after: given))).")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            } else {
+                Text("The first dose will show as due today.")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+        }
+    }
+
     private func save() {
-        let orderedSchedule = kind.isRegimen ? DoseSlot.allCases.filter { schedule.contains($0) } : []
+        let cadenceInterval = kind.isRegimen ? interval : nil
+        let orderedSchedule = kind.isRegimen && cadenceInterval == nil ? DoseSlot.allCases.filter { schedule.contains($0) } : []
+        let trimmedDose = dose.trimmingCharacters(in: .whitespaces)
         if var item = existing {
             let wasScheduled = item.isScheduled
             item.name = name.trimmingCharacters(in: .whitespaces)
             item.kind = kind
-            item.dose = dose.trimmingCharacters(in: .whitespaces)
+            item.dose = trimmedDose
             item.schedule = orderedSchedule
+            let wasRecurring = item.isRecurring
+            item.interval = cadenceInterval
             item.firstIntroduced = started
             if !wasScheduled, !orderedSchedule.isEmpty { item.trackedSince = Date() }
+            // A cadence added to an existing item starts counting today; the
+            // months before it was tracked are not months overdue.
+            if !wasRecurring, cadenceInterval != nil { item.trackedSince = Date() }
             store.updateItem(item)
         } else {
             let item = Item(name: name.trimmingCharacters(in: .whitespaces),
                             scope: kind.defaultsToHousehold ? .household : .pet(petID),
                             kind: kind,
                             firstIntroduced: started,
-                            dose: dose.trimmingCharacters(in: .whitespaces),
+                            dose: trimmedDose,
                             schedule: orderedSchedule,
+                            interval: cadenceInterval,
                             trackedSince: Date())
             store.addItem(item)
+            // The last dose of a long-term med is a real event: it anchors
+            // the next due date and belongs in the timeline.
+            if cadenceInterval != nil, let given = lastGiven {
+                let stamp = Calendar.current.date(bySettingHour: 12, minute: 0, second: 0, of: given) ?? given
+                store.logIntake(petID: petID, itemID: item.id, date: min(stamp, Date()), amount: trimmedDose)
+            }
         }
-        if !orderedSchedule.isEmpty {
+        if !orderedSchedule.isEmpty || cadenceInterval != nil {
             Task { await DoseReminders.shared.requestAuthorization() }
         }
         dismiss()
@@ -436,8 +606,10 @@ struct RegimenSheet: View {
                     } else {
                         SectionHeader(title: "Current")
                         ForEach(active) { item in
-                            Button { editing = item } label: { RegimenRow(item: item) }
-                                .buttonStyle(.plain)
+                            Button { editing = item } label: {
+                                RegimenRow(item: item, intervalState: store.intervalState(petID: petID, item: item))
+                            }
+                            .buttonStyle(.plain)
                         }
                     }
 
@@ -488,6 +660,8 @@ struct RegimenSheet: View {
 
 struct RegimenRow: View {
     let item: Item
+    /// Where a long-term med stands; nil for daily and as-needed items.
+    var intervalState: IntervalDoseState? = nil
 
     var body: some View {
         HStack(spacing: 10) {
@@ -515,8 +689,11 @@ struct RegimenRow: View {
         if let stopped = item.stopped {
             return "Stopped \(relativeDay(stopped)) · started \(shortDate(item.firstIntroduced))"
         }
-        let when = item.schedule.isEmpty ? "As needed" : item.schedule.map(\.label).joined(separator: " & ")
-        return "\(when) · since \(shortDate(item.firstIntroduced))"
+        if let state = intervalState {
+            let last = state.last.map { "last \(shortDate($0.date))" } ?? "none logged yet"
+            return "\(item.cadenceLabel) · \(last) · \(state.dueLabel.lowercased())"
+        }
+        return "\(item.cadenceLabel) · since \(shortDate(item.firstIntroduced))"
     }
 }
 
@@ -667,17 +844,133 @@ struct DoseChecklist: View {
     }
 }
 
-/// One-tap slot pills for the home screen: "Morning ✓ · Evening due".
+/// The long-term meds: one row each with the next due date and a one-tap
+/// "Given". Tapping a dose given today again clears it. Long-press to log
+/// it on another day (the injection was at the vet last Tuesday).
+struct IntervalChecklist: View {
+    @EnvironmentObject var store: AppStore
+    let petID: UUID
+
+    @State private var backdating: Item?
+
+    var body: some View {
+        let dues = store.intervalDues(for: petID)
+        if !dues.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 6) {
+                    Image(systemName: "calendar.badge.clock")
+                        .font(.caption)
+                    Text("Long-term")
+                        .font(.caption.weight(.semibold))
+                    Spacer()
+                }
+                .foregroundColor(.secondary)
+                ForEach(dues) { due in
+                    row(due)
+                }
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: DS.radius).fill(DS.surface))
+            .sheet(item: $backdating) { item in
+                IntakeSheet(petID: petID, preselectedItemID: item.id)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func row(_ due: AppStore.IntervalDue) -> some View {
+        let item = due.item
+        let state = due.state
+        Button {
+            store.setIntervalDose(petID: petID, item: item, status: state.isLogged ? nil : .given)
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: symbol(state))
+                    .font(.title3)
+                    .foregroundColor(color(state))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(item.name + (item.dose.isEmpty ? "" : " · \(item.dose)"))
+                        .font(.subheadline)
+                        .foregroundColor(.primary)
+                    Text(detail(state))
+                        .font(.caption2)
+                        .foregroundColor(state.isDue && !state.isLogged ? color(state) : .secondary)
+                }
+                Spacer()
+                if !state.isLogged {
+                    Text("Given")
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(Capsule().fill(color(state).opacity(0.14)))
+                        .foregroundColor(color(state))
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button {
+                backdating = item
+            } label: {
+                Label("Given on another day…", systemImage: "calendar")
+            }
+            if !state.isLogged {
+                Button {
+                    store.setIntervalDose(petID: petID, item: item, status: .skipped)
+                } label: {
+                    Label("Skipped on purpose", systemImage: "minus.circle")
+                }
+            }
+            if state.isLogged {
+                Button(role: .destructive) {
+                    store.setIntervalDose(petID: petID, item: item, status: nil)
+                } label: {
+                    Label("Clear", systemImage: "arrow.uturn.backward")
+                }
+            }
+        }
+    }
+
+    private func detail(_ state: IntervalDoseState) -> String {
+        if let given = state.givenToday { return "Given \(timeOnly(given.date)) · next \(shortDate(state.nextDue))" }
+        var parts = [state.dueLabel]
+        if let last = state.last {
+            parts.append(last.status == .skipped ? "skipped \(shortDate(last.date))" : "last \(shortDate(last.date))")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private func symbol(_ state: IntervalDoseState) -> String {
+        if state.isLogged { return "checkmark.circle.fill" }
+        return state.isDue ? "circle" : "circle.dotted"
+    }
+
+    private func color(_ state: IntervalDoseState) -> Color {
+        if state.isLogged { return Tier.normal.color }
+        if state.isOverdue { return Tier.concern.color }
+        if state.isDue { return Tier.monitor.color }
+        return .secondary
+    }
+}
+
+/// One-tap pills for the home screen: "Morning ✓ · Evening due", plus any
+/// long-term med that's due, late, or coming up in the next few days.
 /// Tapping an incomplete slot gives everything in it; tapping a complete one
 /// clears it (the mis-tap must be undoable in the same place).
 struct DoseStrip: View {
     @EnvironmentObject var store: AppStore
     let petID: UUID
 
+    /// A long-term med shows on the home screen this many days ahead —
+    /// enough notice to order the refill, not so much it becomes noise.
+    private let headsUpDays = 3
+
     var body: some View {
         let summaries = DoseSlot.allCases.compactMap { store.slotSummary(petID: petID, slot: $0) }
-        if !summaries.isEmpty {
-            HStack(spacing: 8) {
+        let dues = store.intervalDues(for: petID).filter { $0.state.isLogged || $0.state.daysUntilDue <= headsUpDays }
+        if !summaries.isEmpty || !dues.isEmpty {
+            FlowLayout(spacing: 8) {
                 ForEach(summaries, id: \.slot) { summary in
                     Button {
                         if summary.isComplete {
@@ -686,22 +979,52 @@ struct DoseStrip: View {
                             store.giveSlot(petID: petID, slot: summary.slot)
                         }
                     } label: {
-                        HStack(spacing: 5) {
-                            Image(systemName: summary.isComplete ? "checkmark.circle.fill" : summary.slot.symbol)
-                                .font(.caption)
-                            Text(label(summary))
-                                .font(.caption.weight(.semibold))
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 7)
-                        .background(Capsule().fill(color(summary).opacity(0.14)))
-                        .foregroundColor(color(summary))
+                        pill(symbol: summary.isComplete ? "checkmark.circle.fill" : summary.slot.symbol,
+                             text: label(summary), color: color(summary))
                     }
                     .buttonStyle(.plain)
                 }
-                Spacer()
+                ForEach(dues) { due in
+                    Button {
+                        store.setIntervalDose(petID: petID, item: due.item, status: due.state.isLogged ? nil : .given)
+                    } label: {
+                        pill(symbol: due.state.isLogged ? "checkmark.circle.fill" : "calendar.badge.clock",
+                             text: label(due), color: color(due.state))
+                    }
+                    .buttonStyle(.plain)
+                }
             }
         }
+    }
+
+    private func pill(symbol: String, text: String, color: Color) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: symbol)
+                .font(.caption)
+            Text(text)
+                .font(.caption.weight(.semibold))
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background(Capsule().fill(color.opacity(0.14)))
+        .foregroundColor(color)
+    }
+
+    private func label(_ due: AppStore.IntervalDue) -> String {
+        let name = due.item.name
+        if due.state.isLogged { return "\(name) given" }
+        let days = due.state.daysUntilDue
+        if days == 0 { return "\(name) due" }
+        if days == 1 { return "\(name) tomorrow" }
+        if days > 0 { return "\(name) in \(days) days" }
+        return "\(name) \(-days)d overdue"
+    }
+
+    private func color(_ state: IntervalDoseState) -> Color {
+        if state.isLogged { return Tier.normal.color }
+        if state.isOverdue { return Tier.concern.color }
+        if state.isDue { return Tier.monitor.color }
+        return .secondary
     }
 
     private func label(_ summary: AppStore.SlotSummary) -> String {
@@ -757,13 +1080,18 @@ struct IntakeRow: View {
     }
 
     private var subtitle: String {
+        let item = store.item(intake.itemID)
         var parts: [String] = []
         if intake.status == .skipped { parts.append("Skipped") }
-        if let slot = intake.slot { parts.append("\(slot.label) dose") } else if store.item(intake.itemID)?.kind.isRegimen == true {
+        if let slot = intake.slot {
+            parts.append("\(slot.label) dose")
+        } else if let interval = item?.interval {
+            parts.append(interval.doseLabel)
+        } else if item?.kind.isRegimen == true {
             parts.append("Extra dose")
         }
         if !intake.note.isEmpty { parts.append("“\(intake.note)”") }
-        return parts.isEmpty ? (store.item(intake.itemID)?.kind.label ?? "") : parts.joined(separator: " · ")
+        return parts.isEmpty ? (item?.kind.label ?? "") : parts.joined(separator: " · ")
     }
 }
 
