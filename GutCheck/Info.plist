@@ -20,6 +20,8 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>CKSharingSupported</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>Scoop uses the camera to photograph your pet's poop for scoring. Photos stay in Scoop and are never saved to your photo library.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>remote-notification</string>
