@@ -220,3 +220,90 @@ struct TimingPicker: View {
         .animation(.easeInOut(duration: 0.2), value: timing)
     }
 }
+
+/// Swipe-to-delete for rows that live in a ScrollView, where List's
+/// `swipeActions` isn't available. A leftward drag slides the row to reveal a
+/// trash button; a long swipe deletes outright. Only one row in a group stays
+/// open at a time: rows share `openID` and close when another one opens.
+struct SwipeToDelete<Content: View>: View {
+    let id: UUID
+    @Binding var openID: UUID?
+    let onDelete: () -> Void
+    @ViewBuilder let content: Content
+
+    @State private var offset: CGFloat = 0
+    @State private var dragging = false
+
+    private let revealWidth: CGFloat = 72
+    private let spring = Animation.spring(response: 0.3, dampingFraction: 0.85)
+
+    var body: some View {
+        ZStack(alignment: .trailing) {
+            Button {
+                deleteAnimated()
+            } label: {
+                Image(systemName: "trash.fill")
+                    .font(.body.weight(.semibold))
+                    .foregroundColor(.white)
+                    .frame(width: revealWidth)
+                    .frame(maxHeight: .infinity)
+                    .background(RoundedRectangle(cornerRadius: DS.rowRadius).fill(Color.red))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Delete entry")
+            .opacity(offset < 0 ? 1 : 0)
+
+            content
+                .overlay {
+                    // While open, a tap anywhere on the row closes it
+                    // instead of reaching whatever the row does on tap.
+                    if offset != 0 {
+                        Button { close() } label: {
+                            Color.clear.contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Close")
+                    }
+                }
+                .offset(x: offset)
+                .gesture(
+                    DragGesture(minimumDistance: 18, coordinateSpace: .local)
+                        .onChanged { value in
+                            // Leave vertical drags to the ScrollView.
+                            guard dragging || abs(value.translation.width) > abs(value.translation.height) else { return }
+                            dragging = true
+                            if openID != id { openID = id }
+                            let base: CGFloat = offset <= -revealWidth ? -revealWidth : 0
+                            offset = min(0, base + value.translation.width)
+                        }
+                        .onEnded { _ in
+                            dragging = false
+                            if offset < -UIScreen.main.bounds.width * 0.55 {
+                                deleteAnimated()
+                            } else if offset < -revealWidth / 2 {
+                                withAnimation(spring) { offset = -revealWidth }
+                            } else {
+                                close()
+                            }
+                        }
+                )
+        }
+        .clipped()
+        .onChange(of: openID) { current in
+            if current != id && offset != 0 { close() }
+        }
+    }
+
+    private func close() {
+        withAnimation(spring) { offset = 0 }
+        if openID == id { openID = nil }
+    }
+
+    private func deleteAnimated() {
+        withAnimation(.easeInOut(duration: 0.2)) { offset = -UIScreen.main.bounds.width }
+        if openID == id { openID = nil }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            withAnimation { onDelete() }
+        }
+    }
+}
