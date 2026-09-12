@@ -4,6 +4,8 @@
 
 Status: Draft v0.3 · Owner: Meagan · Last updated: Aug 2026
 
+> **Built since v0.3 (Sep 2026), not yet folded into the spec:** the chronic-animal need cut in §11 came back as a concrete feature set once a chronically unwell dog in the house asked for it. Named food and meds as reusable items; a per-pet regimen with a morning/evening dose checklist on the home screen; long-term meds on an interval (next dose derived from the last one logged); fixed-length courses; local reminders. The W8 vet summary was reordered medication-first (current meds with adherence, then what changed, then what the gut did) and the generated "questions for the vet" were replaced by dated facts side by side plus the owner's own note. §10's AI surface gained one output-side element: a two-to-three-sentence opening line, fully cited and guarded in code. The README documents the shipped state; this document is kept as the spec the build started from.
+
 > **What changed from v0.2:** Capture restructured around the **4Cs** — Consistency, Color, Coating, Contents — as four independent axes instead of one score plus a flag bucket. Consistency split into a **five-point owner scale** (logs / a little soft / soft serve / diarrhea / liquid) displayed over a stored 1–7 veterinary value, with the dry end demoted behind a *more* control. Flat red-flag list replaced with a **four-tier triage ladder** that mirrors the convention every vet-facing chart already uses. Icon asset strategy simplified to shape-plus-tint.
 >
 > *From v0.1:* continuous daily logging and single-pet assumptions were replaced by the **episode** state machine inside a **multi-pet household**; cross-feeding, protocol capture, and household-vs-pet item scoping added.

@@ -20,13 +20,13 @@ Free. All territories.
 ## Privacy
 
 - **Privacy policy URL**: publish `docs/privacy.md` (GitHub Pages on the repo, or the README's raw link works for review)
-- **Data collection**: if the AI scorer is disabled for the release build, answer "Data Not Collected". If enabled, declare **Photos or Videos** under "Data Not Linked to You", purpose "App Functionality", not used for tracking.
+- **Data collection**: if the AI features are disabled for the release build (no API key), answer "Data Not Collected". If enabled, declare **Photos or Videos** (photo scoring) and **Health** (the vet summary opening line sends med names, dates, and stool counts) under "Data Not Linked to You", purpose "App Functionality", not used for tracking.
 - CloudKit household data stays in the user's iCloud, which Apple treats as not collected by the developer.
 
 ## Version information
 
 **Promotional text** (170, editable without a new build):
-Track poop, appetite, and stress for every animal in the house. Know when it's a wait-and-see and when it's a call-the-vet.
+Track poop, food, and meds for every animal in the house. Know when it's a wait-and-see and when it's a call-the-vet.
 
 **Description** (4000):
 
@@ -41,8 +41,14 @@ BUILT FOR MULTI-PET HOMES
 
 CAPTURE THAT TAKES SECONDS
 - Four quick taps: consistency, color, coating, content
-- Optional photo attach
+- Snap a photo in the app. It stays in Scoop, never in your camera roll
 - Urgent signs get a different screen, because that's not the moment for chips
+
+MEDS WITHOUT THE MENTAL LOAD
+- Morning and evening checklist on the home screen, one tap per dose
+- Monthly heartworm, joint injections, flea treatment: Scoop works out the next date from the last one you logged
+- Fixed courses ("twice a day for 10 days") count down and stop nagging when they're done
+- Reminders at 7am and 7pm, and a nudge each morning a long-term dose is late
 
 EPISODES, NOT ENTRIES
 - Scoop groups related events into an episode and tracks it to resolution
@@ -50,7 +56,8 @@ EPISODES, NOT ENTRIES
 - Cross-feeding and exposure tracking across pets
 
 A SUMMARY YOUR VET WILL ACTUALLY READ
-- One-tap vet summary with timeline, exposures, and ages
+- Leads with what the vet asks first: current meds and how many doses were missed
+- What changed this month, what the gut did, and what happened in the 72 hours before an episode
 - Every line traces to something you logged. No guesses.
 
 PRIVATE BY DESIGN
@@ -61,9 +68,9 @@ PRIVATE BY DESIGN
 Scoop is a tracker, not a diagnosis. When something looks urgent, it tells you to call your vet.
 
 **Keywords** (100, comma separated, no spaces):
-pet health,dog poop,cat poop,stool tracker,vet,pet diary,dog health,cat health,symptom log,pet record
+pet health,dog poop,cat poop,stool tracker,vet,pet diary,dog health,pet medication,symptom log,pet record
 
-**Support URL**: https://github.com/meagan-glenn/gutcheck
+**Support URL**: https://github.com/meagan-glenn/scoop
 **Marketing URL**: (optional, leave blank)
 **Copyright**: 2026 Meagan Glenn
 
@@ -71,10 +78,10 @@ pet health,dog poop,cat poop,stool tracker,vet,pet diary,dog health,cat health,s
 
 ## Screenshots
 
-Required: 6.9" iPhone (1320 x 2868 or 1290 x 2796). Regenerate `docs/screenshots` on the iPhone 17 Pro Max simulator. Suggested order:
-1. Home, multi-pet household with an open episode
+Required: 6.9" iPhone (1320 x 2868 or 1290 x 2796). The README set in `docs/screenshots` is 6.3" (iPhone 17 Pro); capture the store set on the iPhone 17 Pro Max simulator. Suggested order:
+1. Home, multi-pet household with an open episode and the dose checklist
 2. Capture sheet, four axes
-3. Episode timeline
+3. Pet screen with meds (next dose due, course progress)
 4. Vet summary
 5. Household sync / onboarding
 
@@ -92,7 +99,7 @@ Uses only HTTPS (exempt). Answer: uses encryption → yes; qualifies for exempti
 
 ## Before you press Submit
 
-- [ ] Decide AI scorer: off for 1.0 (delete Secrets.plist before archiving) or behind a proxy
+- [ ] Decide AI features (photo scoring and the summary opening line): off for 1.0 (delete Secrets.plist before archiving) or behind a proxy
 - [ ] MARKETING_VERSION 1.0.0, CURRENT_PROJECT_VERSION bumped
 - [ ] Triage copy says "call your vet", never diagnoses
 - [ ] Privacy policy URL live
