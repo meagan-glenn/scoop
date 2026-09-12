@@ -404,10 +404,13 @@ struct Pet: Identifiable, Codable, Equatable {
     var photoFilename: String? // profile photo in Documents/photos; emoji fallback when nil
     var birthdate: Date?
     var isArchived: Bool // out of the household, history kept
+    /// The owner's own point for the vet, typed on the summary and kept
+    /// until they clear it. The one line the app doesn't compute.
+    var vetNote: String
 
     init(id: UUID = UUID(), name: String, species: Species, breed: String, avatar: String,
          conditions: [String] = [], mode: PetMode = .baseline, photoFilename: String? = nil,
-         birthdate: Date? = nil, isArchived: Bool = false) {
+         birthdate: Date? = nil, isArchived: Bool = false, vetNote: String = "") {
         self.id = id
         self.name = name
         self.species = species
@@ -418,6 +421,7 @@ struct Pet: Identifiable, Codable, Equatable {
         self.photoFilename = photoFilename
         self.birthdate = birthdate
         self.isArchived = isArchived
+        self.vetNote = vetNote
     }
 
     // Tolerant decoding: fields added after launch must not wipe stored pets.
@@ -433,6 +437,7 @@ struct Pet: Identifiable, Codable, Equatable {
         photoFilename = try container.decodeIfPresent(String.self, forKey: .photoFilename)
         birthdate = try container.decodeIfPresent(Date.self, forKey: .birthdate)
         isArchived = try container.decodeIfPresent(Bool.self, forKey: .isArchived) ?? false
+        vetNote = try container.decodeIfPresent(String.self, forKey: .vetNote) ?? ""
     }
 
     /// "8 mo" / "4 yrs" — age is what the vet actually asks for.

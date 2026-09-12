@@ -58,6 +58,22 @@ extension Tier {
     }
 }
 
+extension StoolColor {
+    /// Literal color for the chip swatch — the axis is color, so show it.
+    var swatch: Color {
+        switch self {
+        case .brown: return Color(red: 0.45, green: 0.30, blue: 0.16)
+        case .green: return Color(red: 0.40, green: 0.55, blue: 0.25)
+        case .yellowOrange: return Color(red: 0.90, green: 0.65, blue: 0.20)
+        case .greyGreasy: return Color(red: 0.60, green: 0.60, blue: 0.58)
+        case .redStreaks: return Color(red: 0.80, green: 0.20, blue: 0.20)
+        case .whiteChalky: return Color(red: 0.93, green: 0.92, blue: 0.88)
+        case .blackTarry: return Color(red: 0.12, green: 0.10, blue: 0.10)
+        case .pinkPurple: return Color(red: 0.75, green: 0.35, blue: 0.60)
+        }
+    }
+}
+
 extension PetMode {
     var badgeColor: Color {
         switch self {
@@ -94,12 +110,22 @@ struct Chip: View {
     let label: String
     let isSelected: Bool
     var tint: Color = .accentColor
+    /// A color axis shows its color: a dot the eye can scan without reading.
+    var swatch: Color? = nil
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            Text(label)
-                .font(.subheadline.weight(isSelected ? .semibold : .regular))
+            HStack(spacing: 6) {
+                if let swatch {
+                    Circle()
+                        .fill(swatch)
+                        .overlay(Circle().stroke(Color.primary.opacity(0.2), lineWidth: 0.5))
+                        .frame(width: 10, height: 10)
+                }
+                Text(label)
+                    .font(.subheadline.weight(isSelected ? .semibold : .regular))
+            }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
                 .background(

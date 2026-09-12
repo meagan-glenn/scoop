@@ -1,71 +1,82 @@
 import SwiftUI
 
-/// W8 — the vet summary. One tap from the pet screen, built for the moment
-/// you're standing in the exam room. Headline first, detail behind it,
-/// questions phrased as questions — never conclusions.
+/// W8 — the vet summary, medication-first. Built for a vet scanning a phone
+/// for thirty seconds: what the animal is on, what changed, what the gut did,
+/// then flags and possible triggers. Every line is arithmetic over logged
+/// events — nothing is generated — and dated facts sit side by side so the
+/// vet forms the question instead of the app asking it. The owner's own note
+/// is the one line the app doesn't compute.
 struct SummarySheet: View {
     @EnvironmentObject var store: AppStore
     @Environment(\.dismiss) private var dismiss
     let petID: UUID
 
+    @State private var ownerNote = ""
+    /// The model's opening line, present only when a key is configured,
+    /// there is something to say, and every sentence survived the guards.
+    @State private var opening: [String] = []
+    @State private var writingOpening = false
     private let windowDays = 30
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    headlineCard
+                    header
 
-                    if let episode = store.activeEpisode(for: petID) {
-                        currentEpisodeCard(episode)
-                    }
-
-                    let episodes = episodesInWindow
-                    if !episodes.isEmpty {
-                        SectionHeader(title: "Episodes")
-                        ForEach(episodes) { episode in
-                            EpisodeCard(episode: episode)
+                    if !opening.isEmpty {
+                        openingCard
+                    } else if writingOpening {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text("Writing the opening line…")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
                         }
                     }
 
-                    let meds = medBlocks
-                    if !meds.isEmpty {
-                        SectionHeader(title: "Meds & supplements")
-                        ForEach(meds) { block in
-                            MedBlockView(block: block)
+                    SectionHeader(title: "Current meds")
+                    if activeMeds.isEmpty && stoppedMeds.isEmpty {
+                        Text("No meds or supplements.")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    } else {
+                        VStack(spacing: 8) {
+                            ForEach(activeMeds) { med in MedRow(med: med) }
+                            ForEach(stoppedMeds) { med in MedRow(med: med) }
+                        }
+                    }
+
+                    let changes = changesThisMonth
+                    if !changes.isEmpty {
+                        SectionHeader(title: "Changed this month")
+                        BulletCard(lines: changes)
+                    }
+
+                    SectionHeader(title: "What the gut did")
+                    BulletCard(lines: gutLines)
+
+                    let flags = flagLog
+                    if !flags.isEmpty {
+                        SectionHeader(title: "Flags")
+                        VStack(spacing: 8) {
+                            ForEach(flags) { event in
+                                OutputRow(event: event, showsVetScore: true)
+                            }
                         }
                     }
 
                     let triggers = suspectedTriggers
                     if !triggers.isEmpty {
-                        SectionHeader(title: "Preceded episodes by ≤72h")
-                        ForEach(triggers, id: \.self) { trigger in
-                            Label(trigger, systemImage: "questionmark.circle")
-                                .font(.subheadline)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(10)
-                                .background(RoundedRectangle(cornerRadius: DS.rowRadius).fill(DS.surface))
-                        }
+                        SectionHeader(title: "Before episodes (within 72h)")
+                        BulletCard(lines: triggers)
                     }
 
-                    let flags = flagLog
-                    if !flags.isEmpty {
-                        SectionHeader(title: "Flag log")
-                        ForEach(flags) { event in
-                            OutputRow(event: event)
-                        }
-                    }
+                    SectionHeader(title: "Owner note")
+                    PillTextField(placeholder: "The one thing to raise with the vet", text: $ownerNote)
 
-                    SectionHeader(title: "Questions for the vet")
-                    ForEach(vetQuestions, id: \.self) { question in
-                        Label(question, systemImage: "text.bubble")
-                            .font(.subheadline)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(10)
-                            .background(RoundedRectangle(cornerRadius: DS.rowRadius).fill(DS.surface))
-                    }
-
-                    Text("Owner-logged observations, not a clinical record. Nothing here is a diagnosis.")
+                    Text("Owner-logged observations, not a clinical record.")
                         .font(.caption2)
                         .foregroundColor(.secondary)
                 }
@@ -83,60 +94,243 @@ struct SummarySheet: View {
                     }
                 }
             }
+            .onAppear { ownerNote = store.pet(petID)?.vetNote ?? "" }
+            .onDisappear { saveNote() }
+            .task(id: facts.joined(separator: "\n")) {
+                // Only when there is something to open with: a med or an
+                // episode. One normal log on day one would just be padded.
+                guard AIScorer.isConfigured, !activeMeds.isEmpty || !episodesInWindow.isEmpty else {
+                    opening = []
+                    return
+                }
+                writingOpening = true
+                opening = (try? await AISummary.opening(facts: facts)) ?? []
+                writingOpening = false
+            }
         }
     }
 
-    // MARK: Pieces
+    // MARK: Opening line
 
-    private var headlineCard: some View {
+    private var openingCard: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label("Opening line · written from the log", systemImage: "sparkles")
+                .font(.caption.weight(.semibold))
+                .foregroundColor(.secondary)
+            Text(opening.joined(separator: " "))
+                .font(.subheadline)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: DS.rowRadius).fill(DS.brand.opacity(0.08)))
+    }
+
+    /// Everything the model is allowed to know: the bullets on this screen,
+    /// one fact per line, in the order they appear. The owner's note is theirs
+    /// and stays out.
+    private var facts: [String] {
         let pet = store.pet(petID)
-        let outputs = outputsInWindow
-        let normals = outputs.filter { $0.tier == .normal }.count
+        var lines: [String] = []
         let signalment = [pet?.ageLabel, (pet?.breed.isEmpty == false) ? pet?.breed : nil]
             .compactMap { $0 }
-            .joined(separator: " · ")
+            + (pet?.conditions ?? [])
+        lines.append("\(pet?.name ?? "The pet")\(signalment.isEmpty ? "" : ", " + signalment.joined(separator: ", ")). Record covers the last \(windowDays) days.")
+        for med in activeMeds + stoppedMeds {
+            let dose = med.item.dose.isEmpty ? "" : " \(med.item.dose)"
+            var line = "\(med.item.isActive ? "Current med" : "Stopped med"): \(med.item.name)\(dose), \(med.whenLine)"
+            if let adherence = med.adherenceLine { line += ". \(adherence)" }
+            lines.append(line)
+        }
+        lines += changesThisMonth.map { "Changed this month: \($0)" }
+        lines += gutLines
+        lines += flagLog.map { event in
+            "Flagged stool \(shortDateTime(event.date)): \(event.reading.consistency.label.lowercased()), \(event.reading.color.label.lowercased()), \(event.tier.label.lowercased())"
+        }
+        lines += suspectedTriggers.map { "Before an episode: \($0)" }
+        return lines
+    }
+
+    // MARK: Header
+
+    private var header: some View {
+        let pet = store.pet(petID)
+        let signalment = [pet?.ageLabel, (pet?.breed.isEmpty == false) ? pet?.breed : nil]
+            .compactMap { $0 }
+            + (pet?.conditions ?? [])
         return VStack(alignment: .leading, spacing: 4) {
-            Text("\(pet?.name ?? ""), last \(windowDays) days")
-                .font(.title3.weight(.bold))
+            Text(pet?.name ?? "")
+                .font(.title2.weight(.bold))
             if !signalment.isEmpty {
-                Text(signalment)
-                    .font(.caption)
+                Text(signalment.joined(separator: " · "))
+                    .font(.subheadline)
                     .foregroundColor(.secondary)
             }
-            Text("\(episodesInWindow.count) episode\(episodesInWindow.count == 1 ? "" : "s") · \(normals) of \(outputs.count) logged stools normal")
-                .font(.subheadline)
+            Text("Last \(windowDays) days")
+                .font(.caption)
                 .foregroundColor(.secondary)
-            if let pet = pet, !pet.conditions.isEmpty {
-                Text("Known conditions: \(pet.conditions.joined(separator: ", "))")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
         }
-        .padding()
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 16).fill(Color.accentColor.opacity(0.10)))
     }
 
-    private func currentEpisodeCard(_ episode: Episode) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Label("Open episode · Day \(episode.durationDays)", systemImage: "exclamationmark.circle.fill")
-                .font(.subheadline.weight(.bold))
-                .foregroundColor(Tier.monitor.color)
-            Text(episode.note)
-                .font(.subheadline)
-            let used = store.interventions(in: episode)
-            if !used.isEmpty {
-                Text("Tried so far: " + used.map { $0.kind.label.lowercased() }.joined(separator: ", "))
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-        }
-        .padding()
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 16).fill(Tier.monitor.color.opacity(0.10)))
+    // MARK: Meds
+
+    /// One med as the vet wants it: what, how much, how often, since when,
+    /// and how reliably it went in. Every number is arithmetic over events.
+    struct Med: Identifiable {
+        var item: Item
+        var whenLine: String
+        var adherenceLine: String?
+        var id: UUID { item.id }
     }
 
-    // MARK: Computations
+    private var regimenInWindow: [Item] {
+        store.items(for: petID).filter { item in
+            item.kind.isRegimen && (item.isActive || (item.stopped ?? .distantPast) >= windowStart)
+        }
+    }
+
+    private var activeMeds: [Med] {
+        regimenInWindow.filter(\.isActive).sorted { $0.firstIntroduced > $1.firstIntroduced }.map(med)
+    }
+
+    private var stoppedMeds: [Med] {
+        regimenInWindow.filter { !$0.isActive }.sorted { ($0.stopped ?? .distantPast) > ($1.stopped ?? .distantPast) }.map(med)
+    }
+
+    private func med(_ item: Item) -> Med {
+        var when = item.cadenceLabel
+        if let course = item.courseLabel, let end = item.plannedEnd() {
+            when += " \(course), through \(shortDate(end))"
+        }
+        when += " · since \(shortDate(item.firstIntroduced))"
+        if let stopped = item.stopped { when += " · stopped \(shortDate(stopped))" }
+
+        var adherence: String?
+        if item.interval != nil, let state = store.intervalState(petID: petID, item: item) {
+            // A long-term med is judged on the last dose and the next.
+            var parts: [String] = []
+            if let last = state.last {
+                parts.append((last.status == .skipped ? "Last skipped " : "Last given ") + shortDate(last.date))
+            } else {
+                parts.append("No dose logged yet")
+            }
+            if state.isCourseComplete {
+                parts.append("course complete")
+            } else if item.isActive {
+                parts.append(state.isOverdue ? "overdue since \(shortDate(state.nextDue))" : "next due \(shortDate(state.nextDue))")
+            }
+            if let planned = state.plannedDoses {
+                parts.append("\(state.dosesGiven) of \(planned) doses given")
+            }
+            adherence = parts.joined(separator: " · ")
+        } else if !item.schedule.isEmpty {
+            let counts = store.adherence(for: petID, item: item, from: windowStart)
+            if counts.scheduled > 0 {
+                adherence = "Given \(counts.given) of \(counts.scheduled) scheduled doses"
+                // Only worth saying when tracking began after the start date;
+                // otherwise "since" already appears on the line above.
+                if item.trackedSince > windowStart,
+                   !Calendar.current.isDate(item.trackedSince, inSameDayAs: item.firstIntroduced) {
+                    adherence! += " since \(shortDate(item.trackedSince))"
+                }
+            }
+        } else {
+            let given = store.intakes(for: petID, itemID: item.id)
+                .filter { $0.status == .given && $0.date >= windowStart }.count
+            adherence = given == 0 ? nil : "Given \(given) time\(given == 1 ? "" : "s") this month"
+        }
+        return Med(item: item, whenLine: when, adherenceLine: adherence)
+    }
+
+    // MARK: Changes
+
+    /// Starts, stops, misses, overdue doses, finished courses — dated. The
+    /// section a vet reads first, so it carries nothing else.
+    private var changesThisMonth: [String] {
+        var lines: [String] = []
+        for item in regimenInWindow where item.firstIntroduced >= windowStart {
+            lines.append("Started \(item.name) · \(shortDate(item.firstIntroduced))")
+        }
+        for item in regimenInWindow {
+            if let stopped = item.stopped, stopped >= windowStart {
+                lines.append("Stopped \(item.name) · \(shortDate(stopped))")
+            }
+        }
+        let missed = store.missedDoses(for: petID, from: windowStart)
+        let byItem = Dictionary(grouping: missed, by: { $0.item.id })
+        for (_, misses) in byItem.sorted(by: { $0.value.count > $1.value.count }) {
+            guard let name = misses.first?.item.name else { continue }
+            let days = Array(Set(misses.map { Calendar.current.startOfDay(for: $0.day) })).sorted()
+            let count = misses.count
+            var line = "Missed \(count) dose\(count == 1 ? "" : "s") of \(name)"
+            if days.count <= 3 {
+                line += " · " + days.map(shortDate).joined(separator: ", ")
+            } else if let last = days.last {
+                line += " · last \(shortDate(last))"
+            }
+            lines.append(line)
+        }
+        for due in store.intervalDues(for: petID) where due.state.isOverdue {
+            lines.append("\(due.item.name) overdue · was due \(shortDate(due.state.nextDue))")
+        }
+        for item in store.finishedCourses(for: petID) {
+            let end = item.plannedEnd().map { " · \(shortDate($0))" } ?? ""
+            lines.append("\(item.name) course finished\(end)")
+        }
+        return lines
+    }
+
+    // MARK: Gut
+
+    /// Status first, then the month's tally, then each med's before-versus-
+    /// since. The juxtaposition is the finding; no sentence draws it.
+    private var gutLines: [String] {
+        var lines: [String] = []
+        if let episode = store.activeEpisode(for: petID) {
+            var line = "Open episode, day \(episode.durationDays) · \(episode.note)"
+            let tried = store.interventions(in: episode)
+            if !tried.isEmpty {
+                line += " · tried " + tried.map { $0.kind.label.lowercased() }.joined(separator: ", ")
+            }
+            lines.append(line)
+        }
+        let outputs = outputsInWindow
+        if outputs.isEmpty {
+            lines.append("No stools logged in \(windowDays) days")
+        } else {
+            lines.append("\(Self.tierSummary(outputs)) in \(windowDays) days")
+        }
+        for episode in episodesInWindow where !episode.isActive {
+            var line = "\(shortDate(episode.start)): \(episode.note), resolved in \(episode.durationDays) day\(episode.durationDays == 1 ? "" : "s")"
+            let tried = store.interventions(in: episode)
+            if !tried.isEmpty {
+                line += " · tried " + tried.map { $0.kind.label.lowercased() }.joined(separator: ", ")
+            }
+            lines.append(line)
+        }
+        for item in regimenInWindow {
+            // Only when both sides have logs — one side alone is not a comparison.
+            let courseEnd = item.stopped ?? Date()
+            let before = store.data.events.filter { $0.petID == petID && $0.date >= windowStart && $0.date < item.firstIntroduced }
+            let since = store.data.events.filter { $0.petID == petID && $0.date >= item.firstIntroduced && $0.date <= courseEnd }
+            guard !before.isEmpty, !since.isEmpty else { continue }
+            let lead = item.isActive ? "Since \(item.name) (\(shortDate(item.firstIntroduced)))" : "While on \(item.name)"
+            lines.append("\(lead): \(Self.tierSummary(since)) · before: \(Self.tierSummary(before))")
+        }
+        return lines
+    }
+
+    /// "6 of 8 normal · 2 concern" — counts by tier, worst first.
+    private static func tierSummary(_ events: [OutputEvent]) -> String {
+        let normals = events.filter { $0.tier == .normal }.count
+        var parts = ["\(normals) of \(events.count) normal"]
+        for tier in Tier.allCases.reversed() where tier != .normal {
+            let count = events.filter { $0.tier == tier }.count
+            if count > 0 { parts.append("\(count) \(tier.label.lowercased())") }
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    // MARK: Windows
 
     private var windowStart: Date {
         Date().addingTimeInterval(-Double(windowDays) * 24 * 3600)
@@ -156,99 +350,7 @@ struct SummarySheet: View {
         outputsInWindow.filter { $0.tier >= .concern }.sorted { $0.date > $1.date }
     }
 
-    /// One med or supplement, as the vet wants it: what, since when, how
-    /// reliably it went in, and what the stools did before versus since.
-    /// Every number is arithmetic over logged events.
-    struct MedBlock: Identifiable {
-        var item: Item
-        var statusLine: String
-        var adherenceLine: String?
-        var beforeLine: String?
-        var sinceLine: String?
-        var id: UUID { item.id }
-    }
-
-    private var medBlocks: [MedBlock] {
-        let items = store.items(for: petID).filter { item in
-            item.kind.isRegimen && (item.isActive || (item.stopped ?? .distantPast) >= windowStart)
-        }
-        return items
-            .sorted { a, b in
-                if a.isActive != b.isActive { return a.isActive }
-                return a.firstIntroduced > b.firstIntroduced
-            }
-            .map { item in
-                var when = item.cadenceLabel.lowercased()
-                if let course = item.courseLabel, let end = item.plannedEnd() {
-                    when += " \(course), through \(shortDate(end))"
-                }
-                var status = "\(item.dose.isEmpty ? "" : item.dose + " · ")\(when) · started \(shortDate(item.firstIntroduced))"
-                if let stopped = item.stopped { status += " · stopped \(shortDate(stopped))" }
-
-                var adherence: String?
-                if item.interval != nil, let state = store.intervalState(petID: petID, item: item) {
-                    // A long-term med is judged on the last dose and the next,
-                    // not on a daily tally.
-                    var parts: [String] = []
-                    if let last = state.last {
-                        parts.append((last.status == .skipped ? "Last skipped " : "Last given ") + shortDate(last.date))
-                    } else {
-                        parts.append("No dose logged yet")
-                    }
-                    if state.isCourseComplete {
-                        parts.append("course complete")
-                    } else if item.isActive {
-                        parts.append(state.isOverdue
-                                     ? "next was due \(shortDate(state.nextDue)) (\(state.dueLabel.lowercased()))"
-                                     : "next due \(shortDate(state.nextDue))")
-                    }
-                    if let planned = state.plannedDoses {
-                        parts.append("\(state.dosesGiven) of \(planned) planned doses given")
-                    } else {
-                        let given = store.intakes(for: petID, itemID: item.id)
-                            .filter { $0.status == .given && $0.date >= windowStart }.count
-                        if given > 0 { parts.append("\(given) dose\(given == 1 ? "" : "s") in the window") }
-                    }
-                    adherence = parts.joined(separator: " · ")
-                } else if !item.schedule.isEmpty {
-                    let counts = store.adherence(for: petID, item: item, from: windowStart)
-                    if counts.scheduled > 0 {
-                        adherence = "Given \(counts.given) of \(counts.scheduled) scheduled doses"
-                        if item.trackedSince > windowStart {
-                            adherence! += " since \(shortDate(item.trackedSince))"
-                        }
-                    }
-                } else {
-                    let given = store.intakes(for: petID, itemID: item.id)
-                        .filter { $0.status == .given && $0.date >= windowStart }.count
-                    adherence = given == 0 ? nil : "Given \(given) time\(given == 1 ? "" : "s") in the window"
-                }
-
-                // Stools before the start vs. while on it. Only shown when
-                // both sides have logs — one side alone is not a comparison.
-                let courseEnd = item.stopped ?? Date()
-                let before = store.data.events.filter { $0.petID == petID && $0.date >= windowStart && $0.date < item.firstIntroduced }
-                let since = store.data.events.filter { $0.petID == petID && $0.date >= item.firstIntroduced && $0.date <= courseEnd }
-                var beforeLine: String?
-                var sinceLine: String?
-                if !before.isEmpty, !since.isEmpty {
-                    beforeLine = "Before: " + Self.tierSummary(before)
-                    sinceLine = (item.isActive ? "Since: " : "While on it: ") + Self.tierSummary(since)
-                }
-                return MedBlock(item: item, statusLine: status, adherenceLine: adherence, beforeLine: beforeLine, sinceLine: sinceLine)
-            }
-    }
-
-    /// "6 of 8 normal · 2 concern" — counts by tier, worst first.
-    private static func tierSummary(_ events: [OutputEvent]) -> String {
-        let normals = events.filter { $0.tier == .normal }.count
-        var parts = ["\(normals) of \(events.count) normal"]
-        for tier in Tier.allCases.reversed() where tier != .normal {
-            let count = events.filter { $0.tier == tier }.count
-            if count > 0 { parts.append("\(count) \(tier.label.lowercased())") }
-        }
-        return parts.joined(separator: " · ")
-    }
+    // MARK: Triggers
 
     /// Anything logged within 72h before an episode opened — exposures,
     /// cross-feeding, named intake, missed doses, new household items.
@@ -304,123 +406,125 @@ struct SummarySheet: View {
         return Array(Set(lines)).sorted()
     }
 
-    private var vetQuestions: [String] {
-        var questions: [String] = []
-        for episode in episodesInWindow {
-            if let med = store.medStartBefore(episode) {
-                let name = med.name.isEmpty ? "a recent med change" : med.name
-                questions.append("Symptoms began ~\(hoursBetween(med.date, episode.start))h after \(name). Could they be related?")
-            }
-        }
-        for block in medBlocks where block.item.isActive {
-            if let since = block.sinceLine, let before = block.beforeLine {
-                questions.append("\(block.item.name): \(before.lowercased()); \(since.lowercased()). Keep going, adjust, or stop?")
-            } else if block.item.kind == .med, block.item.interval == nil {
-                questions.append("\(block.item.name): still the right call, and for how long?")
-            }
-        }
-        let missedTotal = store.missedDoses(for: petID, from: windowStart).count
-        if missedTotal >= 3 {
-            questions.append("\(missedTotal) scheduled doses were missed this month. Does that change the read on whether it's working?")
-        }
-        for due in store.intervalDues(for: petID) where due.state.daysUntilDue <= -7 {
-            questions.append("\(due.item.name) is \(due.state.dueLabel.lowercased()). Does the gap matter, and should the schedule reset from the next dose?")
-        }
-        if !suspectedTriggers.isEmpty {
-            questions.append("Do any of the items or events preceding episodes warrant an elimination trial?")
-        }
-        if questions.isEmpty {
-            questions.append("Anything in this pattern that warrants tests or a diet change?")
-        }
-        return Array(Set(questions)).sorted()
+    // MARK: Owner note
+
+    private func saveNote() {
+        guard var pet = store.pet(petID), pet.vetNote != ownerNote else { return }
+        pet.vetNote = ownerNote
+        store.updatePet(pet)
     }
 
+    // MARK: Share
+
     /// Plain-text rendering for share / print / paste into a portal message.
+    /// Same order as the screen: meds lead.
     private var summaryText: String {
         let pet = store.pet(petID)
-        let outputs = outputsInWindow
-        let normals = outputs.filter { $0.tier == .normal }.count
         var lines: [String] = []
-        let signalment = [(pet?.breed.isEmpty == false) ? pet?.breed : nil, pet?.ageLabel]
+        let signalment = [pet?.ageLabel, (pet?.breed.isEmpty == false) ? pet?.breed : nil]
             .compactMap { $0 }
-            .joined(separator: ", ")
-        lines.append("SCOOP: \(pet?.name ?? "")\(signalment.isEmpty ? "" : " (\(signalment))"), last \(windowDays) days")
-        lines.append("\(episodesInWindow.count) episode(s) · \(normals) of \(outputs.count) logged stools normal")
-        if let pet = pet, !pet.conditions.isEmpty {
-            lines.append("Known conditions: \(pet.conditions.joined(separator: ", "))")
+            + (pet?.conditions ?? [])
+        lines.append("SCOOP: \(pet?.name ?? "")\(signalment.isEmpty ? "" : " (\(signalment.joined(separator: ", ")))"), last \(windowDays) days")
+        if !opening.isEmpty {
+            lines.append("")
+            lines.append(opening.joined(separator: " "))
         }
         lines.append("")
-        for episode in episodesInWindow {
-            let status = episode.isActive ? "OPEN, day \(episode.durationDays)" : "resolved in \(episode.durationDays) days"
-            lines.append("• \(shortDate(episode.start)) · \(episode.note) (\(status))")
-            let tried = store.interventions(in: episode)
-            if !tried.isEmpty {
-                lines.append("  Tried: \(tried.map { $0.kind.label.lowercased() }.joined(separator: ", "))")
-            }
+        lines.append("Current meds:")
+        if activeMeds.isEmpty && stoppedMeds.isEmpty {
+            lines.append("• None")
         }
-        if !medBlocks.isEmpty {
-            lines.append("")
-            lines.append("Meds & supplements:")
-            for block in medBlocks {
-                lines.append("• \(block.item.name) — \(block.statusLine)")
-                if let adherence = block.adherenceLine { lines.append("  \(adherence)") }
-                if let before = block.beforeLine, let since = block.sinceLine { lines.append("  \(before) · \(since)") }
-            }
+        for med in activeMeds + stoppedMeds {
+            let dose = med.item.dose.isEmpty ? "" : " \(med.item.dose)"
+            lines.append("• \(med.item.name)\(dose) — \(med.whenLine)")
+            if let adherence = med.adherenceLine { lines.append("  \(adherence)") }
         }
-        if !suspectedTriggers.isEmpty {
+        let changes = changesThisMonth
+        if !changes.isEmpty {
             lines.append("")
-            lines.append("Preceded episodes by ≤72h:")
-            for trigger in suspectedTriggers { lines.append("• \(trigger)") }
-        }
-        if !flagLog.isEmpty {
-            lines.append("")
-            lines.append("Flag log:")
-            for event in flagLog {
-                lines.append("• \(shortDateTime(event.date)) · \(event.reading.consistency.label) (vet score \(event.reading.consistency.vetScore)), \(event.reading.color.label), tier \(event.tier.label)")
-            }
+            lines.append("Changed this month:")
+            for change in changes { lines.append("• \(change)") }
         }
         lines.append("")
-        lines.append("Questions:")
-        for question in vetQuestions { lines.append("• \(question)") }
+        lines.append("What the gut did:")
+        for line in gutLines { lines.append("• \(line)") }
+        let flags = flagLog
+        if !flags.isEmpty {
+            lines.append("")
+            lines.append("Flags:")
+            for event in flags {
+                lines.append("• \(shortDateTime(event.date)) · \(event.reading.consistency.label) (vet score \(event.reading.consistency.vetScore)), \(event.reading.color.label), \(event.tier.label.lowercased())")
+            }
+        }
+        let triggers = suspectedTriggers
+        if !triggers.isEmpty {
+            lines.append("")
+            lines.append("Before episodes (within 72h):")
+            for trigger in triggers { lines.append("• \(trigger)") }
+        }
+        let note = ownerNote.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !note.isEmpty {
+            lines.append("")
+            lines.append("Owner note: \(note)")
+        }
         lines.append("")
         lines.append("Owner-logged observations via Scoop. Not a diagnosis.")
         return lines.joined(separator: "\n")
     }
 }
 
-/// One med as a card: name and dose up top, the facts underneath.
-struct MedBlockView: View {
-    let block: SummarySheet.MedBlock
+/// One med, three lines at most: what and how much, when, how reliably.
+struct MedRow: View {
+    let med: SummarySheet.Med
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        let item = med.item
+        VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 8) {
-                Image(systemName: block.item.kind.symbol)
-                    .foregroundColor(block.item.isActive ? block.item.kind.tint : .secondary)
-                Text(block.item.name)
+                Image(systemName: item.kind.symbol)
+                    .foregroundColor(item.isActive ? item.kind.tint : .secondary)
+                    .frame(width: 20)
+                Text(item.name + (item.dose.isEmpty ? "" : " · \(item.dose)"))
                     .font(.subheadline.weight(.semibold))
+                    .foregroundColor(item.isActive ? .primary : .secondary)
                 Spacer()
-                if !block.item.isActive {
+                if !item.isActive {
                     Text("Stopped")
                         .font(.caption2.weight(.bold))
                         .foregroundColor(.secondary)
                 }
             }
-            Text(block.statusLine)
+            Text(med.whenLine)
                 .font(.caption)
                 .foregroundColor(.secondary)
-            if let adherence = block.adherenceLine {
+            if let adherence = med.adherenceLine {
                 Text(adherence)
-                    .font(.caption)
-            }
-            if let before = block.beforeLine, let since = block.sinceLine {
-                Text(before)
-                    .font(.caption)
-                Text(since)
                     .font(.caption)
             }
         }
         .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: DS.rowRadius).fill(DS.surface))
+    }
+}
+
+/// A section's bullets in one card, not a card per line.
+struct BulletCard: View {
+    let lines: [String]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(lines, id: \.self) { line in
+                HStack(alignment: .top, spacing: 8) {
+                    Text("•")
+                        .foregroundColor(.secondary)
+                    Text(line)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .font(.subheadline)
+            }
+        }
+        .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: DS.rowRadius).fill(DS.surface))
     }

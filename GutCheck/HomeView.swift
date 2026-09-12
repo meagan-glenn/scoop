@@ -16,21 +16,22 @@ struct HomeView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 20) {
-                    // A greeting that carries state: warm when all is quiet,
-                    // watchful when an episode is open.
-                    Text(greeting)
-                        .font(.body)
-                        .foregroundColor(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    // Only when there's something to say. On a quiet day the
+                    // pet cards speak for themselves.
+                    if let greeting {
+                        Text(greeting)
+                            .font(.body)
+                            .foregroundColor(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
 
                     if store.data.isDemo {
                         DemoBanner()
                     }
 
                     // The household is the hero — 95% of opens are healthy days,
-                    // and the pets are why anyone is here.
-                    SectionHeader(title: "The household")
-
+                    // and the pets are why anyone is here. No header: three
+                    // pet cards are self-evidently the household.
                     ForEach(store.activePets) { pet in
                         VStack(spacing: 8) {
                             NavigationLink {
@@ -46,24 +47,28 @@ struct HomeView: View {
                         }
                     }
 
-                    Button {
-                        showAddPet = true
-                    } label: {
-                        HStack(spacing: 10) {
-                            Image(systemName: "plus.circle.fill")
-                            Text("Add an animal")
-                                .font(.subheadline.weight(.semibold))
+                    // The multi-pet nudge (W10): a quiet card while the house
+                    // has one animal, then it retires to the toolbar plus.
+                    if store.activePets.count < 2 {
+                        Button {
+                            showAddPet = true
+                        } label: {
+                            HStack(spacing: 10) {
+                                Image(systemName: "plus.circle.fill")
+                                Text("Add an animal")
+                                    .font(.subheadline.weight(.semibold))
+                            }
+                            .foregroundColor(.accentColor)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 14)
+                            .background(
+                                RoundedRectangle(cornerRadius: 16)
+                                    .strokeBorder(Color.secondary.opacity(0.35),
+                                                  style: StrokeStyle(lineWidth: 1.5, dash: [6, 5]))
+                            )
                         }
-                        .foregroundColor(.accentColor)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 14)
-                        .background(
-                            RoundedRectangle(cornerRadius: 16)
-                                .strokeBorder(Color.secondary.opacity(0.35),
-                                              style: StrokeStyle(lineWidth: 1.5, dash: [6, 5]))
-                        )
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
 
                     let archived = store.data.pets.filter { $0.isArchived }
                     if !archived.isEmpty {
@@ -75,43 +80,53 @@ struct HomeView: View {
                         .frame(maxWidth: .infinity)
                     }
 
-                    // One quiet row; the sheet holds the invite and status.
+                    // Secondary logging, deliberately quieter than the pet
+                    // cards: icons on the page, not a second row of buttons.
+                    HStack(alignment: .top, spacing: 4) {
+                        quickAction("Something's off", symbol: "exclamationmark.bubble") { showSomethingsOff = true }
+                        quickAction("Food & meds", symbol: "pills") { showIntake = true }
+                        // Food theft needs someone to steal from.
+                        if store.activePets.count >= 2 {
+                            quickAction("Food theft", symbol: "fork.knife") { showCrossFeed = true }
+                        }
+                        quickAction("Stress & events", symbol: "cloud.bolt") { showExposure = true }
+                    }
+                    .padding(.top, 8)
+                }
+                .padding()
+            }
+            .navigationTitle("Scoop")
+            .toolbar {
+                ToolbarItemGroup(placement: .primaryAction) {
+                    // Sync status and the invite live behind the icon; the
+                    // symbol itself says whether the household is shared.
                     // Hidden in the demo — pretend animals don't sync.
                     if !store.data.isDemo {
                         Button {
                             showSync = true
                         } label: {
-                            Label(syncRowLabel, systemImage: syncRowSymbol)
-                                .font(.footnote)
-                                .foregroundColor(.secondary)
-                                .frame(maxWidth: .infinity)
+                            Image(systemName: syncRowSymbol)
                         }
-                        .buttonStyle(.plain)
+                        .accessibilityLabel(syncRowLabel)
                     }
-
-                    SectionHeader(title: "Quick log")
-                        .padding(.top, 4)
-
-                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
-                        quickAction("Log a poop", symbol: "camera.fill") { showCapture = true }
-                        quickAction("Food & meds", symbol: "pills.circle") { showIntake = true }
-                        // Food theft needs someone to steal from.
-                        if store.activePets.count >= 2 {
-                            quickAction("Food theft", symbol: "fork.knife.circle") { showCrossFeed = true }
+                    if store.activePets.count >= 2 {
+                        Button {
+                            showAddPet = true
+                        } label: {
+                            Image(systemName: "plus")
                         }
-                        quickAction("Stress & events", symbol: "cloud.bolt.circle") { showExposure = true }
+                        .accessibilityLabel("Add an animal")
                     }
                 }
-                .padding()
             }
-            .navigationTitle("Scoop")
-            // Firm but calm, anchored in the thumb zone. Brand indigo, not
-            // alarm orange — the alarm state belongs to the pet cards.
+            // Camera-first (PRD principle 2): the one thing someone standing
+            // over a bad stool wants is the camera. Watch mode follows from
+            // an abnormal log rather than being a separate front door.
             .safeAreaInset(edge: .bottom) {
                 Button {
-                    showSomethingsOff = true
+                    showCapture = true
                 } label: {
-                    Label("Something's off", systemImage: "exclamationmark.bubble.fill")
+                    Label("Log a poop", systemImage: "camera.fill")
                         .font(.headline)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 10)
@@ -150,27 +165,29 @@ struct HomeView: View {
 
     private func quickAction(_ title: String, symbol: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            VStack(spacing: 5) {
+            VStack(spacing: 6) {
                 Image(systemName: symbol)
                     .font(.title3)
+                    .foregroundColor(.accentColor)
+                    .frame(width: 48, height: 48)
+                    .background(Circle().fill(DS.surface))
                 Text(title)
-                    .font(.caption.weight(.medium))
+                    .font(.caption2.weight(.medium))
+                    .foregroundColor(.primary)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
             }
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 10)
         }
-        .buttonStyle(.bordered)
+        .buttonStyle(.plain)
     }
 
-    private var greeting: String {
+    /// Only spoken when an episode is open; a quiet day needs no caption.
+    private var greeting: String? {
         let watching = store.activePets.filter { $0.mode != .baseline }
-        if !watching.isEmpty {
-            let names = watching.map(\.name).joined(separator: " and ")
-            return "Keeping an eye on \(names). You've got this."
-        }
-        let hour = Calendar.current.component(.hour, from: Date())
-        let hello = hour < 4 ? "Up late?" : hour < 12 ? "Good morning!" : hour < 18 ? "Good afternoon!" : "Good evening!"
-        return "\(hello) All quiet on the back end."
+        guard !watching.isEmpty else { return nil }
+        let names = watching.map(\.name).joined(separator: " and ")
+        return "Keeping an eye on \(names). You've got this."
     }
 
     private var syncRowLabel: String {
@@ -264,6 +281,8 @@ struct PetCard: View {
 
     var body: some View {
         let episode = store.activeEpisode(for: pet.id)
+        // The card wears the episode's worst tier, not a fixed amber.
+        let tier = episode.map { store.episodeTier($0) }
         HStack(spacing: 14) {
             PetAvatar(pet: pet, size: 60)
             VStack(alignment: .leading, spacing: 4) {
@@ -271,13 +290,13 @@ struct PetCard: View {
                     Text(pet.name)
                         .font(.title3.weight(.semibold))
                     // The badge only appears when there's something to say.
-                    if episode != nil {
+                    if let tier {
                         Text(pet.mode.label)
                             .font(.caption2.weight(.bold))
                             .padding(.horizontal, 7)
                             .padding(.vertical, 2)
-                            .background(Capsule().fill(pet.mode.badgeColor.opacity(0.18)))
-                            .foregroundColor(pet.mode.badgeColor)
+                            .background(Capsule().fill(tier.color.opacity(0.18)))
+                            .foregroundColor(tier.color)
                     }
                 }
                 if let episode = episode {
@@ -302,7 +321,7 @@ struct PetCard: View {
                 .foregroundColor(.secondary)
         }
         // Watch mode escalates the card itself — state lives with the pet.
-        .card(episode == nil ? DS.surface : Tier.monitor.color.opacity(0.10))
+        .card(tier.map { $0.color.opacity(0.10) } ?? DS.surface)
     }
 }
 
@@ -341,29 +360,16 @@ struct SomethingsOffSheet: View {
                         dismiss()
                     }
                 } else {
-                    Form {
-                        Section("Who's off?") {
-                            ForEach(store.activePets) { pet in
-                                Button {
-                                    selectedPetID = pet.id
-                                } label: {
-                                    HStack {
-                                        Text(pet.avatar)
-                                        Text(pet.name)
-                                            .foregroundColor(.primary)
-                                        Spacer()
-                                        if selectedPetID == pet.id {
-                                            Image(systemName: "checkmark.circle.fill")
-                                                .foregroundColor(.accentColor)
-                                        }
-                                    }
-                                }
+                    // Same bones as every other sheet: avatar row, chips,
+                    // one pill field, one button.
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 18) {
+                            if store.activePets.count > 1 {
+                                SectionHeader(title: "Who's off?")
+                                PetPickerRow(selection: $selectedPetID)
                             }
-                        }
-                        Section("What's wrong? (optional)") {
-                            TextField("e.g. soft stool since this morning", text: $note)
-                        }
-                        Section {
+                            SectionHeader(title: "What's wrong?")
+                            PillTextField(placeholder: "e.g. soft stool since this morning", text: $note)
                             Button {
                                 guard let petID = selectedPetID else { return }
                                 if let existing = store.activeEpisode(for: petID) {
@@ -373,10 +379,18 @@ struct SomethingsOffSheet: View {
                                 }
                             } label: {
                                 Text("Start watching")
-                                    .frame(maxWidth: .infinity)
                                     .font(.headline)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 6)
                             }
+                            .buttonStyle(.borderedProminent)
                             .disabled(selectedPetID == nil)
+                        }
+                        .padding()
+                    }
+                    .onAppear {
+                        if selectedPetID == nil, store.activePets.count == 1 {
+                            selectedPetID = store.activePets[0].id
                         }
                     }
                 }

@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 
 /// AI photo scoring: a photo of the stool goes to Claude (vision), which
 /// returns a proposed 4C reading via a forced, strict tool call. The model
@@ -38,22 +39,23 @@ enum AIScorer {
 
     static var isConfigured: Bool { apiKey != nil }
 
-    // The model is not a veterinarian and never diagnoses; it scores four
-    // independent axes and abstains per-axis when the photo doesn't support
-    // a judgment. Enum values match the app's Codable raw values exactly.
+    // Written for Claude Sonnet 5, which follows instructions literally: the
+    // prompt states scope and the abstain rule once, and the axis definitions
+    // live in the tool schema, where the model reads them at the point of
+    // decision. Nothing about diagnosis needs saying — the strict schema
+    // cannot express one. Enum values match the app's Codable raw values.
     private static let systemPrompt = """
-        You score photographs of dog or cat stool for a pet-health tracking app. \
-        You are not a veterinarian and never diagnose. Score four independent axes \
-        using only the provided tool. Consistency maps to fecal scores: logs=2, \
-        littleSoft=4, softServe=5, diarrhea=6, liquid=7, hard=1. For each axis give \
-        a confidence from 0 to 1. If the image is not clearly stool, set is_stool \
-        to false. If lighting, angle, or occlusion prevents assessing an axis, \
-        return "unscorable" for that axis rather than guessing.
+        You score photos of dog or cat stool for a pet-health tracker. Score only the \
+        stool; ignore grass, snow, pavement, bags, and anything else in frame. Report \
+        through the tool: one value per axis plus a confidence from 0 to 1, meaning how \
+        likely that value is correct. Use "unscorable" for any axis the photo does not \
+        show well enough to judge instead of guessing. Set is_stool to false if the \
+        photo is not clearly stool.
         """
 
     private static let toolDefinition: [String: Any] = [
         "name": "report_stool_score",
-        "description": "Report the 4C score for the stool photo. Use unscorable for any axis the photo does not support.",
+        "description": "Report the stool reading on four independent axes with a confidence for each.",
         "strict": true,
         "input_schema": [
             "type": "object",
@@ -66,26 +68,70 @@ enum AIScorer {
                 "contents", "contents_confidence",
             ],
             "properties": [
-                "is_stool": ["type": "boolean", "description": "True only if the image clearly shows animal stool"],
-                "consistency": ["type": "string", "enum": ["logs", "littleSoft", "softServe", "diarrhea", "liquid", "hard", "unscorable"]],
-                "consistency_confidence": ["type": "number"],
-                "color": ["type": "string", "enum": ["brown", "green", "yellowOrange", "greyGreasy", "redStreaks", "whiteChalky", "blackTarry", "pinkPurple", "unscorable"]],
-                "color_confidence": ["type": "number"],
-                "coating": ["type": "string", "enum": ["none", "mucus", "greasy", "unscorable"]],
-                "coating_confidence": ["type": "number"],
-                "contents": ["type": "string", "enum": ["none", "riceSpecks", "grass", "hair", "foreignMaterial", "blood", "unscorable"]],
-                "contents_confidence": ["type": "number"],
+                "is_stool": ["type": "boolean", "description": "True only if the photo clearly shows animal stool."],
+                "consistency": [
+                    "type": "string",
+                    "enum": ["hard", "logs", "littleSoft", "softServe", "diarrhea", "liquid", "unscorable"],
+                    "description": "Purina fecal score. hard: 1, dry pellets or crumbly. logs: 2-3, firm and formed, holds shape. littleSoft: 4, formed but soft, leaves residue. softServe: 5, soft pile, loses shape. diarrhea: 6, texture but no shape. liquid: 7, watery puddle.",
+                ],
+                "consistency_confidence": ["type": "number", "description": "0 to 1."],
+                "color": [
+                    "type": "string",
+                    "enum": ["brown", "green", "yellowOrange", "greyGreasy", "redStreaks", "whiteChalky", "blackTarry", "pinkPurple", "unscorable"],
+                    "description": "Dominant color. redStreaks: fresh red on the surface. blackTarry: black and sticky. pinkPurple: pink to purple, jam-like.",
+                ],
+                "color_confidence": ["type": "number", "description": "0 to 1."],
+                "coating": [
+                    "type": "string",
+                    "enum": ["none", "mucus", "greasy", "unscorable"],
+                    "description": "Surface film. mucus: slimy, jelly-like. greasy: oily or shiny sheen.",
+                ],
+                "coating_confidence": ["type": "number", "description": "0 to 1."],
+                "contents": [
+                    "type": "string",
+                    "enum": ["none", "riceSpecks", "grass", "hair", "foreignMaterial", "blood", "unscorable"],
+                    "description": "Visible inclusions. riceSpecks: small white rice-like segments. blood: blood mixed through, not only surface streaks.",
+                ],
+                "contents_confidence": ["type": "number", "description": "0 to 1."],
             ],
         ],
     ]
 
+    /// Stool photos don't need the model's 2576px high-res tier. 1280px on
+    /// the long edge shows every axis at roughly a quarter of the image
+    /// tokens, and the upload drops from a 12-megapixel original to well
+    /// under a megabyte. Re-encoding also guarantees the bytes are JPEG,
+    /// whatever the picker handed over.
+    private static let maxEdge: CGFloat = 1280
+
+    private static func prepared(_ data: Data) -> Data {
+        guard let image = UIImage(data: data) else { return data }
+        let pixelSize = CGSize(width: image.size.width * image.scale, height: image.size.height * image.scale)
+        let longest = max(pixelSize.width, pixelSize.height)
+        let ratio = min(1, maxEdge / max(longest, 1))
+        let target = CGSize(width: (pixelSize.width * ratio).rounded(), height: (pixelSize.height * ratio).rounded())
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1
+        let resized = UIGraphicsImageRenderer(size: target, format: format).image { _ in
+            image.draw(in: CGRect(origin: .zero, size: target))
+        }
+        return resized.jpegData(compressionQuality: 0.85) ?? data
+    }
+
     static func score(_ imageData: Data) async throws -> AIScore {
         guard let key = apiKey else { throw AIScorerError.notConfigured }
 
+        // Decode and resize off the main actor; the caller is a UI task.
+        let jpeg = await Task.detached(priority: .userInitiated) { prepared(imageData) }.value
+
+        // Sonnet 5 runs adaptive thinking by default; `medium` effort is the
+        // floor where it still reasons per axis instead of answering from an
+        // overall impression, and max_tokens leaves room for that thinking
+        // ahead of the ~150-token tool call.
         let body: [String: Any] = [
             "model": model,
-            "max_tokens": 4096,
-            "output_config": ["effort": "low"],
+            "max_tokens": 2048,
+            "output_config": ["effort": "medium"],
             "system": systemPrompt,
             "tools": [toolDefinition],
             "tool_choice": ["type": "tool", "name": "report_stool_score"],
@@ -97,10 +143,10 @@ enum AIScorer {
                         "source": [
                             "type": "base64",
                             "media_type": "image/jpeg",
-                            "data": imageData.base64EncodedString(),
+                            "data": jpeg.base64EncodedString(),
                         ],
                     ],
-                    ["type": "text", "text": "Score this photo on all four axes."],
+                    ["type": "text", "text": "Score this photo."],
                 ],
             ]],
         ]

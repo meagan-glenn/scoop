@@ -13,6 +13,7 @@ struct PetScreen: View {
     @State private var showEdit = false
     @State private var showRegimen = false
     @State private var showIntake = false
+    @State private var showExposure = false
     @State private var showEndEpisodeConfirm = false
 
     var body: some View {
@@ -27,16 +28,17 @@ struct PetScreen: View {
                     baselineCard
                 }
 
-                // Vet summary is the marquee action: one tap, exam-room ready.
+                // Vet summary is the marquee action when there's something
+                // to report — an open episode or a recent flag. On a quiet
+                // month it's a plain row, not the loudest thing on the page.
                 HStack(spacing: 10) {
-                    Button {
-                        showSummary = true
-                    } label: {
-                        Label("Vet summary", systemImage: "doc.text.fill")
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 8)
+                    if summaryMatters(episode: episode) {
+                        Button { showSummary = true } label: { summaryLabel }
+                            .buttonStyle(.borderedProminent)
+                    } else {
+                        Button { showSummary = true } label: { summaryLabel }
+                            .buttonStyle(.bordered)
                     }
-                    .buttonStyle(.borderedProminent)
 
                     Button {
                         showRegimen = true
@@ -78,24 +80,44 @@ struct PetScreen: View {
             }
             .padding()
         }
-        .navigationTitle("\(pet?.avatar ?? "") \(pet?.name ?? "")")
+        .navigationTitle(pet?.name ?? "")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItemGroup(placement: .primaryAction) {
-                Button {
-                    showIntake = true
-                } label: {
-                    Image(systemName: "fork.knife")
+            // A real avatar in the title instead of an emoji glyph that
+            // renders differently on every device.
+            ToolbarItem(placement: .principal) {
+                if let pet {
+                    HStack(spacing: 8) {
+                        PetAvatar(pet: pet, size: 28)
+                        Text(pet.name)
+                            .font(.headline)
+                    }
                 }
-                Button {
-                    showCapture = true
+            }
+            // One "log something" door with three rooms, instead of two
+            // icons whose glyphs mean other things elsewhere in the app.
+            ToolbarItem(placement: .primaryAction) {
+                Menu {
+                    Button { showCapture = true } label: {
+                        Label("Log a poop", systemImage: "camera")
+                    }
+                    Button { showIntake = true } label: {
+                        Label("Food or med", systemImage: "pills")
+                    }
+                    Button { showExposure = true } label: {
+                        Label("Stress or event", systemImage: "cloud.bolt")
+                    }
                 } label: {
-                    Image(systemName: "camera.fill")
+                    Image(systemName: "plus")
                 }
+                .accessibilityLabel("Log something")
             }
         }
         .sheet(isPresented: $showCapture) {
             CaptureSheet(petID: petID)
+        }
+        .sheet(isPresented: $showExposure) {
+            ExposureSheet(petID: petID)
         }
         .sheet(isPresented: $showRegimen) {
             RegimenSheet(petID: petID)
@@ -138,13 +160,26 @@ struct PetScreen: View {
 
     // MARK: Status
 
+    private var summaryLabel: some View {
+        Label("Vet summary", systemImage: "doc.text.fill")
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+    }
+
+    private func summaryMatters(episode: Episode?) -> Bool {
+        if episode != nil { return true }
+        let windowStart = Date().addingTimeInterval(-30 * 24 * 3600)
+        return store.data.events.contains { $0.petID == petID && $0.date >= windowStart && $0.tier >= .concern }
+    }
+
     private func statusCard(episode: Episode) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        let tier = store.episodeTier(episode)
+        return VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text("Watch mode · Day \(episode.durationDays)")
                     .font(.headline)
                 Spacer()
-                TierBadge(tier: worstTier(in: episode))
+                TierBadge(tier: tier)
             }
             Text(episode.note)
                 .font(.subheadline)
@@ -153,22 +188,17 @@ struct PetScreen: View {
         }
         .padding()
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 16).fill(Tier.monitor.color.opacity(0.10)))
+        .background(RoundedRectangle(cornerRadius: 16).fill(tier.color.opacity(0.10)))
     }
 
+    /// One line of status, no explanation. Baseline is meant to be silent.
     private var baselineCard: some View {
-        let pet = store.pet(petID)
-        return VStack(alignment: .leading, spacing: 6) {
-            Label("Baseline: all quiet", systemImage: "moon.zzz.fill")
-                .font(.headline)
-                .foregroundColor(.secondary)
-            Text("Every log quietly builds \(pet?.name ?? "their") normal for the day it matters.")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-        }
-        .padding()
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: DS.radius).fill(DS.surface))
+        let last = store.lastOutputDate(for: petID)
+        return Label(last.map { "All quiet · logged \(relativeDay($0))" } ?? "All quiet · nothing logged yet",
+                     systemImage: "moon.zzz.fill")
+            .font(.subheadline)
+            .foregroundColor(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: Episode context (med framing, resolve)
@@ -185,11 +215,11 @@ struct PetScreen: View {
                     .font(.subheadline)
             } icon: {
                 Image(systemName: "pills.fill")
-                    .foregroundColor(Tier.concern.color)
+                    .foregroundColor(ItemKind.med.tint)
             }
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: DS.radius).fill(Tier.concern.color.opacity(0.08)))
+            .background(RoundedRectangle(cornerRadius: DS.radius).fill(ItemKind.med.tint.opacity(0.08)))
         }
 
         if store.resolutionProgress(for: episode) >= 3 {
@@ -294,7 +324,7 @@ struct PetScreen: View {
                 Text(intervention.kind.label)
                     .font(.subheadline)
                 Spacer()
-                Text(shortDateTime(intervention.date))
+                Text(relativeDateTime(intervention.date))
                     .font(.caption2)
                     .foregroundColor(.secondary)
             }
@@ -309,12 +339,12 @@ struct PetScreen: View {
         case .crossFeed(let feed):
             HStack(spacing: 10) {
                 Image(systemName: "fork.knife.circle.fill")
-                    .foregroundColor(Tier.concern.color)
+                    .foregroundColor(ItemKind.food.tint)
                     .frame(width: 24)
                 Text("Ate \(store.pet(feed.foodOwnerID)?.name ?? "?")'s food (\(feed.amount))")
                     .font(.subheadline)
                 Spacer()
-                Text(shortDateTime(feed.date))
+                Text(relativeDateTime(feed.date))
                     .font(.caption2)
                     .foregroundColor(.secondary)
             }
@@ -332,9 +362,5 @@ struct PetScreen: View {
         case .intake(let intake): store.removeIntake(id: intake.id)
         case .doses(let group): group.intakes.forEach { store.removeIntake(id: $0.id) }
         }
-    }
-
-    private func worstTier(in episode: Episode) -> Tier {
-        store.events(in: episode).map { $0.tier }.max() ?? .normal
     }
 }
