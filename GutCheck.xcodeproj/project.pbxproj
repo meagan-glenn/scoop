@@ -24,6 +24,7 @@
 		C8A0CD3B4D40037B6DBD89D2 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2918A3A27FA8F9D8F3095DB /* OnboardingView.swift */; };
 		CAA182F259D2EF72A79096B4 /* DoseReminders.swift in Sources */ = {isa = PBXBuildFile; fileRef = F36421F8C852832B9A41652C /* DoseReminders.swift */; };
 		CFB301FF88B80BD1A377AD0F /* SyncView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3E848D8F4B1838A8D9A1CC6 /* SyncView.swift */; };
+		DBF8FB9667B3700231F243E5 /* AISummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = A246036523AE3A1CB75F3F40 /* AISummary.swift */; };
 		DC0FFE8E19BAEEBE363DC400 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = E78199832FC64C3A70E1470A /* Theme.swift */; };
 		DD9BE109FAF5BE7CD2355ED6 /* CaptureView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A090BCE70EB346758E9D6F5 /* CaptureView.swift */; };
 		E6E60CA6C34923021B0E82E8 /* Store.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24EE06A27176DE73DCD95CE6 /* Store.swift */; };
@@ -45,6 +46,7 @@
 		65DF898CEFE63C8E710E458E /* PetScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PetScreen.swift; sourceTree = "<group>"; };
 		842667E423BB5EE12AC0DA99 /* CloudSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudSync.swift; sourceTree = "<group>"; };
 		A1E6FB9D4EF5C514C3DE92C6 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		A246036523AE3A1CB75F3F40 /* AISummary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AISummary.swift; sourceTree = "<group>"; };
 		A2918A3A27FA8F9D8F3095DB /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
 		B3E848D8F4B1838A8D9A1CC6 /* SyncView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncView.swift; sourceTree = "<group>"; };
 		C8C43088D0E1D620D7BB33DD /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
@@ -68,6 +70,7 @@
 			isa = PBXGroup;
 			children = (
 				153513293E97E186E6D2F584 /* AIScorer.swift */,
+				A246036523AE3A1CB75F3F40 /* AISummary.swift */,
 				2E41E7F0E7076C34A9D4DB42 /* App.swift */,
 				EB6EA9A8BC10FD3514AB54B2 /* Assets.xcassets */,
 				3A090BCE70EB346758E9D6F5 /* CaptureView.swift */,
@@ -197,6 +200,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				BAF54BB715032E6ED3F71C58 /* AIScorer.swift in Sources */,
+				DBF8FB9667B3700231F243E5 /* AISummary.swift in Sources */,
 				57F9E7FA0E4EA01C610837D1 /* App.swift in Sources */,
 				DD9BE109FAF5BE7CD2355ED6 /* CaptureView.swift in Sources */,
 				4BDB42498BCD17E81ABB97F2 /* CloudSync.swift in Sources */,
@@ -227,7 +231,7 @@
 				CODE_SIGN_ENTITLEMENTS = GutCheck/GutCheck.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 11;
+				CURRENT_PROJECT_VERSION = 14;
 				DEVELOPMENT_TEAM = MRV697X79G;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -374,7 +378,7 @@
 				CODE_SIGN_ENTITLEMENTS = GutCheck/GutCheck.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 11;
+				CURRENT_PROJECT_VERSION = 14;
 				DEVELOPMENT_TEAM = MRV697X79G;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
