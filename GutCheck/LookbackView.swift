@@ -66,8 +66,25 @@ struct LookbackView: View {
                     }
                 }
 
-                if !lookback.missedDoses.isEmpty {
+                if !lookback.missedDoses.isEmpty || !lookback.overdueIntervals.isEmpty {
                     SectionHeader(title: "Missed doses")
+                    ForEach(lookback.overdueIntervals) { due in
+                        HStack(spacing: 10) {
+                            Image(systemName: "calendar.badge.exclamationmark")
+                                .foregroundColor(due.state.isOverdue ? Tier.concern.color : Tier.monitor.color)
+                                .frame(width: 24)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("\(due.item.name) · \(due.item.cadenceLabel.lowercased())")
+                                    .font(.subheadline)
+                                Text(due.state.last.map { "\(due.state.dueLabel) · last given \(shortDate($0.date))" } ?? "\(due.state.dueLabel) · nothing logged yet")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            Spacer()
+                        }
+                        .padding(10)
+                        .background(RoundedRectangle(cornerRadius: DS.rowRadius).fill(DS.surface))
+                    }
                     ForEach(lookback.missedDoses) { missed in
                         HStack(spacing: 10) {
                             Image(systemName: "circle.slash")
