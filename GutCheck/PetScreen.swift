@@ -15,6 +15,8 @@ struct PetScreen: View {
     @State private var showIntake = false
     @State private var showExposure = false
     @State private var showEndEpisodeConfirm = false
+    /// The timeline row currently slid open for deletion, if any.
+    @State private var swipedEntry: UUID?
 
     var body: some View {
         let pet = store.pet(petID)
@@ -298,14 +300,18 @@ struct PetScreen: View {
                 if case .doses(let group) = entry {
                     DoseGroupRow(group: group)
                 } else {
-                    timelineRow(entry)
-                        .contextMenu {
-                            Button(role: .destructive) {
-                                delete(entry)
-                            } label: {
-                                Label("Delete entry", systemImage: "trash")
+                    // Swipe left to delete; long-press still works for
+                    // anyone who reaches for the menu instead.
+                    SwipeToDelete(id: entry.id, openID: $swipedEntry, onDelete: { delete(entry) }) {
+                        timelineRow(entry)
+                            .contextMenu {
+                                Button(role: .destructive) {
+                                    delete(entry)
+                                } label: {
+                                    Label("Delete entry", systemImage: "trash")
+                                }
                             }
-                        }
+                    }
                 }
             }
         }

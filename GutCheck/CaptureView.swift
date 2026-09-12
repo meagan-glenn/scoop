@@ -1,9 +1,12 @@
 import SwiftUI
 import PhotosUI
 
-/// W2 — Log an output. Camera opens the system photo picker (the simulator has
-/// no camera). With an API key configured, Claude scores the photo and prefills
-/// the four axes; the owner corrects. Without one, capture is fully manual.
+/// W2 — Log an output. The camera tile opens the device camera directly; the
+/// shot goes to the scorer and Scoop's own sandbox, never the Photos library
+/// (the whole point is not having a camera roll full of poop). The simulator
+/// has no camera, so it falls back to the system photo picker. With an API key
+/// configured, Claude scores the photo and prefills the four axes; the owner
+/// corrects. Without one, capture is fully manual.
 struct CaptureSheet: View {
     @EnvironmentObject var store: AppStore
     @Environment(\.dismiss) private var dismiss
@@ -23,6 +26,8 @@ struct CaptureSheet: View {
     @State private var note = ""
     @State private var photoItem: PhotosPickerItem?
     @State private var photoData: Data?
+    @State private var showCamera = false
+    @State private var showLibrary = false
     @State private var aiState: AIState = .idle
     @State private var showMoreConsistency = false
     @State private var showMoreColors = false
@@ -93,9 +98,17 @@ struct CaptureSheet: View {
                     TierBadge(tier: liveTier)
                 }
 
-                // Photo-first capture. On a real phone this is where the camera
-                // opens; the simulator falls back to the photo library.
-                PhotosPicker(selection: $photoItem, matching: .images) {
+                // Photo-first capture. Tap opens the camera itself, not the
+                // photo picker: the shot lives only in Scoop's sandbox and is
+                // never written to the Photos library. The simulator has no
+                // camera, so it falls back to the library picker there.
+                Button {
+                    if CameraCapture.isAvailable {
+                        showCamera = true
+                    } else {
+                        showLibrary = true
+                    }
+                } label: {
                     if let data = photoData, let image = UIImage(data: data) {
                         HStack(spacing: 12) {
                             Image(uiImage: image)
@@ -146,6 +159,14 @@ struct CaptureSheet: View {
                     }
                 }
                 .buttonStyle(.plain)
+                .fullScreenCover(isPresented: $showCamera) {
+                    CameraCapture { data in
+                        photoData = data
+                        scorePhoto()
+                    }
+                    .ignoresSafeArea()
+                }
+                .photosPicker(isPresented: $showLibrary, selection: $photoItem, matching: .images)
                 .onChange(of: photoItem) { item in
                     guard let item = item else { return }
                     Task { @MainActor in
@@ -481,5 +502,64 @@ struct FlowLayout: Layout {
             x += size.width + spacing
             rowHeight = max(rowHeight, size.height)
         }
+    }
+}
+
+/// Direct camera capture. Wraps UIImagePickerController in camera mode so the
+/// shot is handed back as JPEG data and nothing is saved to the Photos library.
+/// Output is normalized to portrait-up and capped at 2048px on the long edge:
+/// enough detail for scoring, small enough to send and store.
+struct CameraCapture: UIViewControllerRepresentable {
+    var onCapture: (Data) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    static var isAvailable: Bool {
+        UIImagePickerController.isSourceTypeAvailable(.camera)
+    }
+
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        picker.sourceType = .camera
+        picker.cameraCaptureMode = .photo
+        picker.cameraDevice = .rear
+        picker.allowsEditing = false
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    final class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
+        let parent: CameraCapture
+        init(_ parent: CameraCapture) { self.parent = parent }
+
+        func imagePickerController(_ picker: UIImagePickerController,
+                                   didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
+            if let image = info[.originalImage] as? UIImage,
+               let data = CameraCapture.jpegData(from: image) {
+                parent.onCapture(data)
+            }
+            parent.dismiss()
+        }
+
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+            parent.dismiss()
+        }
+    }
+
+    /// Redraws the image so orientation is baked into the pixels (camera shots
+    /// carry it as metadata, which not every consumer honors) and downscales.
+    static func jpegData(from image: UIImage, maxPixel: CGFloat = 2048, quality: CGFloat = 0.85) -> Data? {
+        let longest = max(image.size.width, image.size.height)
+        let scale = min(1, maxPixel / longest)
+        let target = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1
+        let rendered = UIGraphicsImageRenderer(size: target, format: format).image { _ in
+            image.draw(in: CGRect(origin: .zero, size: target))
+        }
+        return rendered.jpegData(compressionQuality: quality)
     }
 }

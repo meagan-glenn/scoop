@@ -22,6 +22,8 @@ targets:
       path: GutCheck/Info.plist
       properties:
         CKSharingSupported: true
+        # The capture tile opens the camera directly (not the photo picker).
+        NSCameraUsageDescription: "Scoop uses the camera to photograph your pet's poop for scoring. Photos stay in Scoop and are never saved to your photo library."
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UIBackgroundModes: [remote-notification]
@@ -51,7 +53,7 @@ targets:
         DEVELOPMENT_TEAM: MRV697X79G
         CODE_SIGN_STYLE: Automatic
         MARKETING_VERSION: "0.1.0"
-        CURRENT_PROJECT_VERSION: "14"
+        CURRENT_PROJECT_VERSION: "15"
         TARGETED_DEVICE_FAMILY: "1"
         SWIFT_VERSION: "5.9"
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
