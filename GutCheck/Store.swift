@@ -422,6 +422,12 @@ final class AppStore: ObservableObject {
             .sorted { $0.date > $1.date }
     }
 
+    /// The tier an open episode reads as: its worst logged output, never
+    /// below Monitor — an episode is by definition something to watch.
+    func episodeTier(_ episode: Episode) -> Tier {
+        max(events(in: episode).map(\.tier).max() ?? .monitor, .monitor)
+    }
+
     func interventions(in episode: Episode) -> [Intervention] {
         data.interventions
             .filter { $0.episodeID == episode.id }
@@ -956,6 +962,19 @@ func shortDate(_ date: Date) -> String {
     formatter.dateStyle = .medium
     formatter.timeStyle = .none
     return formatter.string(from: date)
+}
+
+/// "Today 2:04 PM", "Yesterday 8:21 AM", otherwise "Aug 16, 2:04 PM" — the
+/// timeline reads like a diary, not a database dump.
+func relativeDateTime(_ date: Date) -> String {
+    let calendar = Calendar.current
+    let time = timeOnly(date)
+    if calendar.isDateInToday(date) { return "Today \(time)" }
+    if calendar.isDateInYesterday(date) { return "Yesterday \(time)" }
+    let formatter = DateFormatter()
+    let sameYear = calendar.isDate(date, equalTo: Date(), toGranularity: .year)
+    formatter.setLocalizedDateFormatFromTemplate(sameYear ? "MMM d" : "MMM d yyyy")
+    return "\(formatter.string(from: date)), \(time)"
 }
 
 func shortDateTime(_ date: Date) -> String {

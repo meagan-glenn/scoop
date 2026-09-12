@@ -26,6 +26,9 @@ struct CaptureSheet: View {
     @State private var aiState: AIState = .idle
     @State private var showMoreConsistency = false
     @State private var showMoreColors = false
+    /// Coating and contents are "none" nine logs out of ten; they stay folded
+    /// until the owner or the model says otherwise.
+    @State private var showDetails = false
     @State private var savedResult: LogResult?
     @State private var showWatchPrompt = false
     @State private var lookbackPetID: UUID?
@@ -130,8 +133,8 @@ struct CaptureSheet: View {
                                     .font(.subheadline.weight(.semibold))
                                     .foregroundColor(.primary)
                                 Text(AIScorer.isConfigured
-                                     ? "AI prefills all four axes from the photo (the photo is sent to Anthropic for scoring only), or skip it and tap chips below"
-                                     : "Attach it to the record, then score with the chips below")
+                                     ? "AI scores it, you confirm"
+                                     : "Or score with the chips below")
                                     .font(.caption)
                                     .foregroundColor(.secondary)
                             }
@@ -162,9 +165,9 @@ struct CaptureSheet: View {
                             reading.consistency = .hard
                         }
                     } else {
-                        Button("more…") { showMoreConsistency = true }
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+                        Chip(label: "more…", isSelected: false, tint: .secondary) {
+                            showMoreConsistency = true
+                        }
                     }
                 }
 
@@ -173,7 +176,8 @@ struct CaptureSheet: View {
                         ForEach(StoolColor.primary) { color in
                             Chip(label: color.label,
                                  isSelected: reading.color == color,
-                                 tint: color.tier.color) {
+                                 tint: color.tier.color,
+                                 swatch: color.swatch) {
                                 reading.color = color
                             }
                         }
@@ -181,7 +185,8 @@ struct CaptureSheet: View {
                             ForEach(StoolColor.secondary) { color in
                                 Chip(label: color.label,
                                      isSelected: reading.color == color,
-                                     tint: color.tier.color) {
+                                     tint: color.tier.color,
+                                     swatch: color.swatch) {
                                     reading.color = color
                                 }
                             }
@@ -193,28 +198,50 @@ struct CaptureSheet: View {
                     }
                 }
 
-                axisSection(title: "Coating", tier: reading.coating.tier) {
-                    chipWrap {
-                        ForEach(Coating.allCases) { coating in
-                            Chip(label: coating.label,
-                                 isSelected: reading.coating == coating,
-                                 tint: coating.tier.color) {
-                                reading.coating = coating
+                if showDetails || reading.coating != .none || reading.contents != .none {
+                    axisSection(title: "Coating", tier: reading.coating.tier) {
+                        chipWrap {
+                            ForEach(Coating.allCases) { coating in
+                                Chip(label: coating.label,
+                                     isSelected: reading.coating == coating,
+                                     tint: coating.tier.color) {
+                                    reading.coating = coating
+                                }
                             }
                         }
                     }
-                }
 
-                axisSection(title: "Contents", tier: reading.contents.tier) {
-                    chipWrap {
-                        ForEach(Contents.allCases) { contents in
-                            Chip(label: contents.label,
-                                 isSelected: reading.contents == contents,
-                                 tint: contents.tier.color) {
-                                reading.contents = contents
+                    axisSection(title: "Contents", tier: reading.contents.tier) {
+                        chipWrap {
+                            ForEach(Contents.allCases) { contents in
+                                Chip(label: contents.label,
+                                     isSelected: reading.contents == contents,
+                                     tint: contents.tier.color) {
+                                    reading.contents = contents
+                                }
                             }
                         }
                     }
+                } else {
+                    // The form is for correcting, not reading: two axes that
+                    // are almost always "none" take one line until they aren't.
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) { showDetails = true }
+                    } label: {
+                        HStack {
+                            Text("Coating none · Contents none")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                            Spacer()
+                            Text("Change")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundColor(.accentColor)
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 12)
+                        .background(RoundedRectangle(cornerRadius: DS.rowRadius).fill(DS.surface))
+                    }
+                    .buttonStyle(.plain)
                 }
 
                 axisSection(title: "When?", tier: .normal) {
@@ -224,6 +251,13 @@ struct CaptureSheet: View {
                 PillTextField(placeholder: "Note", text: $note)
 
                 saveArea
+
+                if AIScorer.isConfigured {
+                    // The disclosure lives once, out of the hot path.
+                    Text("Photos are sent to Anthropic for scoring only.")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
             }
             .padding()
         }
@@ -257,7 +291,7 @@ struct CaptureSheet: View {
         if petID == nil {
             Label("Pick who this is for at the top", systemImage: "arrow.up.circle")
                 .font(.subheadline.weight(.semibold))
-                .foregroundColor(Tier.monitor.color)
+                .foregroundColor(DS.brand)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         if liveTier == .urgent {
@@ -329,6 +363,11 @@ struct CaptureSheet: View {
                     reading = score.reading
                     if score.reading.consistency == .hard { showMoreConsistency = true }
                     if StoolColor.secondary.contains(score.reading.color) { showMoreColors = true }
+                    // A model that isn't sure about coating or contents
+                    // unfolds them so the owner looks instead of assuming.
+                    if score.uncertainAxes.contains(where: { $0 == "coating" || $0 == "contents" }) {
+                        showDetails = true
+                    }
                     aiState = .scored(uncertain: score.uncertainAxes)
                 } else {
                     aiState = .notStool
@@ -383,7 +422,7 @@ struct OrdinalScale: View {
                     selection = choice
                 } label: {
                     Text(choice.label)
-                        .font(.caption2.weight(isSelected ? .bold : .medium))
+                        .font(.footnote.weight(isSelected ? .bold : .medium))
                         .multilineTextAlignment(.center)
                         .lineLimit(2)
                         .minimumScaleFactor(0.8)

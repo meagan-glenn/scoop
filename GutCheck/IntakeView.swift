@@ -57,10 +57,6 @@ struct IntakeSheet: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    Text("A piece of banana today is a bad stool tomorrow. Name it now and the record can connect the two.")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-
                     if soloPet == nil {
                         SectionHeader(title: "Who?")
                         PetPickerRow(selection: $petID)
@@ -271,7 +267,7 @@ struct NewItemFields: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            PillTextField(placeholder: "Name — banana, metronidazole, CBD oil", text: $name)
+            PillTextField(placeholder: "Name, e.g. banana or metronidazole", text: $name)
             FlowLayout(spacing: 8) {
                 ForEach(ItemKind.allCases) { option in
                     Chip(label: option.label, isSelected: kind == option, tint: option.tint) {
@@ -284,35 +280,43 @@ struct NewItemFields: View {
                 }
             }
             if kind.isRegimen {
-                PillTextField(placeholder: "Usual dose — 250mg, 1 tsp, 0.5ml", text: $dose)
+                PillTextField(placeholder: "Usual dose, e.g. 250mg or 1 tsp", text: $dose)
                 VStack(alignment: .leading, spacing: 6) {
                     Text("How often?")
                         .font(.caption)
                         .foregroundColor(.secondary)
-                    FlowLayout(spacing: 8) {
+                    // Three answers up front; the long tail of intervals
+                    // only appears once "weekly, monthly…" is the answer.
+                    HStack(spacing: 8) {
+                        Chip(label: "As needed", isSelected: cadence == .asNeeded, tint: .accentColor) {
+                            schedule = []
+                            interval = nil
+                            customInterval = false
+                        }
                         Chip(label: "Every day", isSelected: cadence == .daily, tint: .accentColor) {
                             interval = nil
                             customInterval = false
                             if schedule.isEmpty { schedule = [.morning] }
                         }
-                        ForEach(DoseInterval.presets, id: \.self) { preset in
-                            Chip(label: preset.label, isSelected: interval == preset && !customInterval, tint: .accentColor) {
-                                schedule = []
-                                interval = preset
-                                customInterval = false
-                            }
-                        }
-                        Chip(label: "Other…", isSelected: customInterval, tint: .accentColor) {
+                        Chip(label: "Less often", isSelected: cadence == .interval, tint: .accentColor) {
                             schedule = []
-                            customInterval = true
-                            if interval.map({ DoseInterval.presets.contains($0) }) ?? true {
-                                interval = DoseInterval(count: 2, unit: .day)
-                            }
+                            if interval == nil { interval = .monthly }
                         }
-                        Chip(label: "As needed", isSelected: cadence == .asNeeded, tint: .accentColor) {
-                            schedule = []
-                            interval = nil
-                            customInterval = false
+                    }
+                    if cadence == .interval {
+                        FlowLayout(spacing: 8) {
+                            ForEach(DoseInterval.presets, id: \.self) { preset in
+                                Chip(label: preset.label, isSelected: interval == preset && !customInterval, tint: .accentColor) {
+                                    interval = preset
+                                    customInterval = false
+                                }
+                            }
+                            Chip(label: "Other…", isSelected: customInterval, tint: .accentColor) {
+                                customInterval = true
+                                if interval.map({ DoseInterval.presets.contains($0) }) ?? true {
+                                    interval = DoseInterval(count: 2, unit: .day)
+                                }
+                            }
                         }
                     }
                     if cadence == .daily {
@@ -650,20 +654,16 @@ struct RegimenSheet: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    Text("\(pet?.name ?? "Their")'s meds and supplements. Scheduled ones get a checklist and a reminder; the rest are logged as they happen.")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-
                     if reminders.authorization == .denied, !active.filter(\.isScheduled).isEmpty {
                         Label("Reminders are off in Settings → Notifications → Scoop. The checklist still works.", systemImage: "bell.slash")
                             .font(.caption)
-                            .foregroundColor(Tier.monitor.color)
+                            .foregroundColor(.secondary)
                             .padding(10)
-                            .background(RoundedRectangle(cornerRadius: DS.rowRadius).fill(Tier.monitor.color.opacity(0.08)))
+                            .background(RoundedRectangle(cornerRadius: DS.rowRadius).fill(DS.surface))
                     }
 
                     if active.isEmpty {
-                        Text("Nothing yet.")
+                        Text("Nothing yet. A scheduled med gets a daily checklist and a reminder; an as-needed one is just logged when it's given.")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
                     } else {
@@ -784,7 +784,7 @@ struct DoseChecklist: View {
                 if let missedYesterday = missedYesterdayLine {
                     Text(missedYesterday)
                         .font(.caption2)
-                        .foregroundColor(Tier.monitor.color)
+                        .foregroundColor(.secondary)
                 }
             }
             .padding(12)
@@ -880,7 +880,7 @@ struct DoseChecklist: View {
         switch state {
         case .given: return Tier.normal.color
         case .skipped: return .secondary
-        case .due, .missed: return Tier.monitor.color
+        case .due, .missed: return DS.brand
         case .upcoming: return .secondary
         }
     }
@@ -906,8 +906,8 @@ struct DoseChecklist: View {
 
     private func summaryColor(_ summary: AppStore.SlotSummary) -> Color {
         if summary.isComplete { return Tier.normal.color }
-        if case .due = summary.pending { return Tier.monitor.color }
-        if case .missed = summary.pending { return Tier.concern.color }
+        if case .due = summary.pending { return DS.brand }
+        if case .missed = summary.pending { return DS.brand }
         return .secondary
     }
 }
@@ -1034,8 +1034,8 @@ struct IntervalChecklist: View {
 
     private func color(_ state: IntervalDoseState) -> Color {
         if state.isLogged || state.isCourseComplete { return Tier.normal.color }
-        if state.isOverdue { return Tier.concern.color }
-        if state.isDue { return Tier.monitor.color }
+        if state.isOverdue { return DS.brand }
+        if state.isDue { return DS.brand }
         return .secondary
     }
 }
@@ -1145,8 +1145,8 @@ struct DoseStrip: View {
 
     private func color(_ state: IntervalDoseState) -> Color {
         if state.isLogged { return Tier.normal.color }
-        if state.isOverdue { return Tier.concern.color }
-        if state.isDue { return Tier.monitor.color }
+        if state.isOverdue { return DS.brand }
+        if state.isDue { return DS.brand }
         return .secondary
     }
 
@@ -1161,8 +1161,8 @@ struct DoseStrip: View {
 
     private func color(_ summary: AppStore.SlotSummary) -> Color {
         if summary.isComplete { return Tier.normal.color }
-        if case .due = summary.pending { return Tier.monitor.color }
-        if case .missed = summary.pending { return Tier.concern.color }
+        if case .due = summary.pending { return DS.brand }
+        if case .missed = summary.pending { return DS.brand }
         return .secondary
     }
 }
@@ -1189,7 +1189,7 @@ struct IntakeRow: View {
                     .foregroundColor(.secondary)
             }
             Spacer()
-            Text(shortDateTime(intake.date))
+            Text(relativeDateTime(intake.date))
                 .font(.caption2)
                 .foregroundColor(.secondary)
         }
@@ -1321,8 +1321,10 @@ struct DoseGroupRow: View {
 extension ItemKind {
     var tint: Color {
         switch self {
-        case .med: return Tier.concern.color
-        case .supplement: return Tier.normal.color
+        // Item kinds never borrow the triage palette: orange means "concern",
+        // not "medication".
+        case .med: return Color(red: 0.20, green: 0.50, blue: 0.78)
+        case .supplement: return Color(red: 0.16, green: 0.58, blue: 0.62)
         case .food: return DS.brand
         case .treat: return Color(red: 0.48, green: 0.35, blue: 0.72)
         case .chew: return Color(red: 0.48, green: 0.35, blue: 0.72)

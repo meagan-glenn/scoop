@@ -21,16 +21,12 @@ struct LookbackView: View {
 
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                Text("Stool reflects intake from 12 to 36 hours ago. Here's everything from \(petName)'s window.")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-
                 if !lookback.newItems.isEmpty {
                     SectionHeader(title: "New in the last 2 weeks")
                     ForEach(lookback.newItems) { item in
                         HStack {
                             Image(systemName: "sparkles")
-                                .foregroundColor(Tier.monitor.color)
+                                .foregroundColor(DS.brand)
                             VStack(alignment: .leading) {
                                 Text(item.name).font(.subheadline.weight(.semibold))
                                 Text("\(item.kind.label) · introduced \(relativeDay(item.firstIntroduced))")
@@ -40,7 +36,7 @@ struct LookbackView: View {
                             Spacer()
                         }
                         .padding(10)
-                        .background(RoundedRectangle(cornerRadius: 10).fill(Tier.monitor.color.opacity(0.08)))
+                        .background(RoundedRectangle(cornerRadius: 10).fill(DS.brand.opacity(0.08)))
                     }
                 }
 
@@ -49,7 +45,7 @@ struct LookbackView: View {
                     ForEach(lookback.crossFeeds) { feed in
                         HStack {
                             Image(systemName: "fork.knife.circle.fill")
-                                .foregroundColor(Tier.concern.color)
+                                .foregroundColor(ItemKind.food.tint)
                             Text("\(store.pet(feed.eaterID)?.name ?? "?") ate \(store.pet(feed.foodOwnerID)?.name ?? "?")'s food (\(feed.amount)) · \(relativeDay(feed.date))")
                                 .font(.subheadline)
                             Spacer()
@@ -71,7 +67,7 @@ struct LookbackView: View {
                     ForEach(lookback.overdueIntervals) { due in
                         HStack(spacing: 10) {
                             Image(systemName: "calendar.badge.exclamationmark")
-                                .foregroundColor(due.state.isOverdue ? Tier.concern.color : Tier.monitor.color)
+                                .foregroundColor(DS.brand)
                                 .frame(width: 24)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("\(due.item.name) · \(due.item.cadenceLabel.lowercased())")
@@ -88,7 +84,7 @@ struct LookbackView: View {
                     ForEach(lookback.missedDoses) { missed in
                         HStack(spacing: 10) {
                             Image(systemName: "circle.slash")
-                                .foregroundColor(Tier.concern.color)
+                                .foregroundColor(DS.brand)
                                 .frame(width: 24)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("\(missed.item.name) · \(missed.slot.label.lowercased()) dose")
@@ -164,6 +160,8 @@ struct LookbackView: View {
 struct OutputRow: View {
     @EnvironmentObject var store: AppStore
     let event: OutputEvent
+    /// The 1–7 value is for the vet summary; owners read the label.
+    var showsVetScore = false
     @State private var showPhoto = false
     /// Small, decoded once. The full-size image only loads for the sheet.
     @State private var thumbnail: UIImage?
@@ -177,16 +175,21 @@ struct OutputRow: View {
                 HStack {
                     Text(event.reading.consistency.label)
                         .font(.subheadline.weight(.semibold))
-                    Text("(vet score \(event.reading.consistency.vetScore))")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                    if showsVetScore {
+                        Text("(vet score \(event.reading.consistency.vetScore))")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                     Spacer()
-                    TierBadge(tier: event.tier)
+                    // Normal is the absence of a badge; the color bar carries it.
+                    if event.tier > .normal {
+                        TierBadge(tier: event.tier)
+                    }
                 }
                 Text(readingSummary)
                     .font(.caption)
                     .foregroundColor(.secondary)
-                Text(shortDateTime(event.date))
+                Text(relativeDateTime(event.date))
                     .font(.caption2)
                     .foregroundColor(.secondary)
             }

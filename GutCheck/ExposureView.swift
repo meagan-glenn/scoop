@@ -9,7 +9,8 @@ struct ExposureSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var kind: ExposureKind?
-    @State private var petID: UUID?
+    /// Pre-selected from a pet screen; nil asks.
+    @State var petID: UUID? = nil
     @State private var wholeHousehold = false
     @State private var timing: LogTiming = .justNow
     @State private var pickedTime: Date = Date()
@@ -27,10 +28,6 @@ struct ExposureSheet: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    Text("Stress and surprises change outputs too. Log it now, and the lookback remembers so you don't have to.")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-
                     kindGroup(title: "Stress & routine", kinds: stressKinds)
                     kindGroup(title: "Intake", kinds: intakeKinds)
 
@@ -120,7 +117,7 @@ struct ExposureRow: View {
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: exposure.kind.symbol)
-                .foregroundColor(exposure.kind.isMedication ? Tier.concern.color : Color(red: 0.48, green: 0.35, blue: 0.72))
+                .foregroundColor(exposure.kind.isMedication ? ItemKind.med.tint : ItemKind.treat.tint)
                 .frame(width: 24)
             VStack(alignment: .leading, spacing: 2) {
                 Text(exposure.kind.label + (exposure.note.isEmpty ? "" : " · \(exposure.note)"))
